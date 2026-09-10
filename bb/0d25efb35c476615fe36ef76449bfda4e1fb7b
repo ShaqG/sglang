@@ -1,0 +1,20 @@
+python/sglang/srt/disaggregation/ascend/transfer_engine.py
+  h_b23a6a8439c0dd 78-89,96-97
+docs/docs/hardware-platforms/ascend-npus/reference/environment_variables.mdx
+  h_b23a6a8439c0dd 136-144
+docs/docs/hardware-platforms/ascend-npus/getting-started/installation.mdx
+  h_b23a6a8439c0dd 496-509,570-583
+docs/docs/hardware-platforms/ascend-npus/reference/glossary.mdx
+  h_b23a6a8439c0dd 32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "bb0d25efb35c476615fe36ef76449bfda4e1fb7b",
+  "prompts": {},
+  "humans": {
+    "h_b23a6a8439c0dd": {
+      "author": "unknown"
+    }
+  }
+}

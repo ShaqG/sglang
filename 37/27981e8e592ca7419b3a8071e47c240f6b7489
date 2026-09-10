@@ -1,0 +1,43 @@
+docs/docs/hardware-platforms/ascend-npus/reference/glossary.mdx
+  s_266b1f441ec55f::t_32866d1b787766 32
+docs/docs/hardware-platforms/ascend-npus/reference/environment_variables.mdx
+  s_266b1f441ec55f::t_32866d1b787766 135-144
+python/sglang/srt/disaggregation/ascend/transfer_engine.py
+  h_b23a6a8439c0dd 86-88,90-94,102-103
+  h_d965d24456f98f 25-28,83-85,89
+docs/docs/hardware-platforms/ascend-npus/getting-started/installation.mdx
+  s_266b1f441ec55f::t_32866d1b787766 482-509,557-583
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.2",
+  "base_commit_sha": "3727981e8e592ca7419b3a8071e47c240f6b7489",
+  "prompts": {},
+  "humans": {
+    "h_b23a6a8439c0dd": {
+      "author": "unknown"
+    },
+    "h_d965d24456f98f": {
+      "author": "ShaqG <jingshanshi2001@gmail.com>"
+    }
+  },
+  "sessions": {
+    "s_266b1f441ec55f": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a589e753ff12b4f7fc82220",
+        "model": "glm-5.3__dev"
+      },
+      "human_author": null,
+      "custom_attributes": {
+        "edit_kind": "bash",
+        "tool_name": "RunCommand",
+        "external_session_id": "6a589e753ff12b4f7fc82220",
+        "session_id": "6a589e753ff12b4f7fc82220",
+        "operation_id": "6aa27fc4ee042c75ae62ce70",
+        "tool_use_id": "6aa27fc4ee042c75ae62ce70",
+        "display_model_name": "GLM-5.3"
+      }
+    }
+  }
+}

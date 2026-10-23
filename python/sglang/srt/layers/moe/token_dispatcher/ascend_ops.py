@@ -58,8 +58,15 @@ _MC2_QUANT_MODE = {
 
 # ``y_dtype`` of the MC2 ops is an ATen ``ScalarType`` value (op schema:
 # ``int?``), not a ``torch.dtype``, and torch exposes no public dtype -> value
-# conversion, so the mapping is spelled out here (``float8_e5m2`` would be 23).
+# conversion, so the enum is spelled out here.
 _TORCH_DTYPE_TO_ATEN = {
+    torch.int8: 1,
+    torch.int32: 3,
+    torch.float16: 5,
+    torch.float32: 6,
+    torch.bfloat16: 15,
+    torch.bits8: 21,
+    torch.float8_e5m2: 23,
     torch.float8_e4m3fn: 24,
 }
 

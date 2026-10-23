@@ -49,6 +49,13 @@ _MC2_QUANT_MODE = {
     DispatcherOutputDtype.MXFP8: 4,
 }
 
+_MC2_MXFP8_QUANT_MODE = _MC2_QUANT_MODE[DispatcherOutputDtype.MXFP8]
+
+# ATen ``ScalarType`` value of ``torch.float8_e4m3fn`` (23 is e5m2, 24 is e4m3fn
+# in torch_npu's ``torch_dtype_value_to_ge_type``). ``y_dtype`` takes the integer
+# rather than the dtype object.
+_TORCH_FLOAT8_E4M3FN = 24
+
 
 class AscendOpsDispatchOutput(NamedTuple):
     """Metadata passed from Ascend Ops dispatch to the MoE runner."""
@@ -256,6 +263,14 @@ class AscendOpsDispatcher(BaseDispatcher):
                 hidden_states, topk_ids, topk_weights, num_tokens, padded_bs
             )
 
+        # Every quantised mode defaults the payload to int8 unless ``y_dtype`` is
+        # given, which is invalid next to the e8m0 block scale MX emits.
+        mxfp8_args = (
+            {"y_dtype": _TORCH_FLOAT8_E4M3FN}
+            if quant_mode == _MC2_MXFP8_QUANT_MODE
+            else {}
+        )
+
         (
             expand_x,
             dynamic_scales,
@@ -277,9 +292,10 @@ class AscendOpsDispatcher(BaseDispatcher):
             # Per-expert counts, matching ``group_list_type=1`` of the runner.
             expert_token_nums_type=1,
             comm_alg=self.ascend_ops_config.ll_dispatch_alg,
+            **mxfp8_args,
         )
 
-        if quant_mode == 4 and hidden_states.shape[1] % 64 == 0:
+        if quant_mode == _MC2_MXFP8_QUANT_MODE and hidden_states.shape[1] % 64 == 0:
             # The op returns a flat ``(A, h // 32)`` e8m0 scale; the runner's
             # MX kernels take the pair-split ``(A, h // 64, 2)`` form.
             dynamic_scales = dynamic_scales.reshape(

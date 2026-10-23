@@ -56,11 +56,12 @@ _MC2_QUANT_MODE = {
     DispatcherOutputDtype.MXFP8: 4,
 }
 
-# ``torch.float8_e4m3fn`` as an ATen ``ScalarType`` value. The MC2 ops take
-# ``y_dtype`` as that integer (op schema: ``int?``) rather than as a
-# ``torch.dtype``, and torch exposes no public dtype -> value conversion.
-# ``torch.float8_e5m2`` would be 23.
-_ATEN_FLOAT8_E4M3FN = 24
+# ``y_dtype`` of the MC2 ops is an ATen ``ScalarType`` value (op schema:
+# ``int?``), not a ``torch.dtype``, and torch exposes no public dtype -> value
+# conversion, so the mapping is spelled out here (``float8_e5m2`` would be 23).
+_TORCH_DTYPE_TO_ATEN = {
+    torch.float8_e4m3fn: 24,
+}
 
 
 class AscendOpsDispatchOutput(NamedTuple):
@@ -285,7 +286,7 @@ class AscendOpsDispatcher(BaseDispatcher):
         # Every quantised mode defaults the payload to int8 unless ``y_dtype`` is
         # given, which is invalid next to the e8m0 block scale MX emits.
         mxfp8_args = (
-            {"y_dtype": _ATEN_FLOAT8_E4M3FN}
+            {"y_dtype": _TORCH_DTYPE_TO_ATEN[torch.float8_e4m3fn]}
             if quant_mode == _MC2_QUANT_MODE[DispatcherOutputDtype.MXFP8]
             else {}
         )

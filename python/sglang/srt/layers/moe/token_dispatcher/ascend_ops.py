@@ -142,6 +142,7 @@ class _MegaMoEState:
 
     topk_weights: torch.Tensor
     topk_ids: torch.Tensor
+    group: Any
     quant_config: Optional[dict] = None
     num_valid_rows: Optional[int] = None
     dtype_mode: Optional[str] = None
@@ -240,6 +241,11 @@ class AscendOpsDispatcher(BaseDispatcher):
     def _dispatch_fused_op(self, hidden_states, topk_weights, topk_ids):
         is_extend = get_is_extend_in_batch()
         dp_enabled = is_dp_attention_enabled()
+        group = (
+            self.ep_group
+            if not is_extend or self.moe_ascend_ops_config.decode == "fused_op"
+            else self.tp_group
+        )
         prepared = self._prepare_prefill_inputs(
             hidden_states,
             topk_weights,
@@ -266,6 +272,7 @@ class AscendOpsDispatcher(BaseDispatcher):
             forward_state=_MegaMoEState(
                 topk_weights=topk_weights,
                 topk_ids=topk_ids,
+                group=group,
                 quant_config=(
                     dict(self.quant_config) if self.quant_config is not None else None
                 ),

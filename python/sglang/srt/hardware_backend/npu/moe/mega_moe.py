@@ -246,11 +246,10 @@ def run_mega_moe(
     hidden_states,
     topk_weights,
     topk_ids,
+    group,
     dtype_mode: Optional[str] = None,
 ):
     """Run MegaMoE and return the already combined output tensor."""
-
-    from sglang.srt.runtime_context import get_parallel
 
     if hidden_states.shape[0] == 0:
         raise RuntimeError(
@@ -308,7 +307,7 @@ def run_mega_moe(
         get_mega_moe_sym_buffer(
             runner_config,
             quant_config,
-            get_parallel().moe_ep_group.device_group,
+            group,
             hidden_states.shape[0],
             dtype_mode,
         ),

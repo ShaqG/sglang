@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional, Tuple
 
 import torch
 
+from sglang.srt.environ import envs
+
+
+logger = logging.getLogger(__name__)
 
 _SYMM_BUFFER_CACHE: dict[tuple, tuple[int, object]] = {}
+
+# Signatures already logged by ``SGLANG_MEGAMOE_DEBUG``. The operator contract
+# only changes when one of the logged fields changes, so one line per shape is
+# enough to keep the log readable.
+_DEBUG_SEEN: set[tuple] = set()
 
 
 _MEGA_MOE_SUPPORTED_KERNELS_MSG = (
@@ -187,6 +197,36 @@ def check_mega_moe_kernel(layer) -> None:
         )
 
 
+def _symm_buffer_key(runner_config, quant_config, group, dtype_mode) -> tuple:
+    """Cache key of the SymmBuffer shared by one runner configuration."""
+
+    quant_mode, quant_dtype = mega_moe_quant_args(quant_config, dtype_mode)
+    return (
+        id(group),
+        int(runner_config.num_experts),
+        int(runner_config.top_k),
+        int(runner_config.hidden_size),
+        int(runner_config.intermediate_size_per_partition),
+        quant_mode,
+        quant_dtype,
+    )
+
+
+def get_mega_moe_capacity(
+    runner_config,
+    quant_config,
+    group,
+    num_tokens: int,
+    dtype_mode: Optional[str] = None,
+) -> int:
+    """Capacity the SymmBuffer uses for a batch of ``num_tokens`` rows."""
+
+    state = _SYMM_BUFFER_CACHE.get(
+        _symm_buffer_key(runner_config, quant_config, group, dtype_mode)
+    )
+    return max(num_tokens, state[0] if state is not None else 1)
+
+
 def get_mega_moe_sym_buffer(
     runner_config,
     quant_config,
@@ -198,16 +238,8 @@ def get_mega_moe_sym_buffer(
 
     from sgl_kernel_npu.modules.moe import get_symm_buffer_for_mega_moe
 
-    quant_mode, quant_dtype = mega_moe_quant_args(quant_config, dtype_mode)
-    key = (
-        id(group),
-        int(runner_config.num_experts),
-        int(runner_config.top_k),
-        int(runner_config.hidden_size),
-        int(runner_config.intermediate_size_per_partition),
-        quant_mode,
-        quant_dtype,
-    )
+    key = _symm_buffer_key(runner_config, quant_config, group, dtype_mode)
+    quant_mode, quant_dtype = key[5], key[6]
     state = _SYMM_BUFFER_CACHE.get(key)
     max_tokens = max(num_tokens, state[0] if state is not None else 1)
     if state is not None and state[0] == max_tokens:
@@ -242,6 +274,76 @@ def get_mega_moe_sym_buffer(
     )
     _SYMM_BUFFER_CACHE[key] = (max_tokens, buffer)
     return buffer
+
+
+def _describe_tensors(values) -> str:
+    """Shape/dtype summary of a tensor or a per-expert tensor list."""
+
+    if values is None:
+        return "None"
+    if isinstance(values, (list, tuple)):
+        if not values:
+            return "empty"
+        first = values[0]
+    else:
+        first = values
+    shape = getattr(first, "shape", None)
+    dtype = getattr(first, "dtype", None)
+    prefix = f"{len(values)}x" if isinstance(values, (list, tuple)) else ""
+    return f"{prefix}{tuple(shape) if shape is not None else '?'}/{dtype}"
+
+
+def _log_mega_moe_call(
+    *,
+    dtype_mode,
+    quant_config,
+    hidden_states,
+    topk_ids,
+    topk_weights,
+    w13_weights,
+    w2_weights,
+    scale_values,
+    bias_values,
+    activation,
+    activation_clamp,
+    activation_params,
+    capacity,
+    num_tokens,
+    padded,
+) -> None:
+    """Log the operator contract once per distinct shape (diagnostic only)."""
+
+    quant_mode, quant_dtype = mega_moe_quant_args(quant_config, dtype_mode)
+    fields = {
+        "mode": dtype_mode,
+        "quant": f"({quant_mode}, {quant_dtype})",
+        "tokens": num_tokens,
+        "rows": int(hidden_states.shape[0]),
+        "capacity": capacity,
+        "padded": padded,
+        "x": f"{tuple(hidden_states.shape)}/{hidden_states.dtype}",
+        "topk": f"{tuple(topk_ids.shape)}/{topk_ids.dtype}/{topk_weights.dtype}",
+        "experts": f"{len(w13_weights)}x{tuple(w13_weights[0].shape)}"
+        f"/{w13_weights[0].dtype}",
+        "w2": f"{tuple(w2_weights[0].shape)}/{w2_weights[0].dtype}",
+        "scales": _describe_tensors(scale_values),
+        "bias": _describe_tensors(bias_values),
+        "act": activation,
+        "clamp": activation_clamp,
+        "act_params": activation_params,
+    }
+    key = tuple(sorted((name, repr(value)) for name, value in fields.items()))
+    if key in _DEBUG_SEEN or len(_DEBUG_SEEN) >= 32:
+        return
+    _DEBUG_SEEN.add(key)
+    rank = (
+        torch.distributed.get_rank() if torch.distributed.is_initialized() else None
+    )
+    logger.info(
+        "[megamoe] rank=%s %s",
+        rank,
+        " ".join(f"{name}={value}" for name, value in fields.items()),
+    )
 
 
 def run_mega_moe(
@@ -303,19 +405,75 @@ def run_mega_moe(
     if activation_params is not None:
         mega_moe_kwargs["activation_params"] = activation_params
 
+    group = get_parallel().moe_ep_group.device_group
+    num_tokens = hidden_states.shape[0]
+    sym_buffer = get_mega_moe_sym_buffer(
+        runner_config, quant_config, group, num_tokens, dtype_mode
+    )
+
+    capacity = None
+    if envs.SGLANG_MEGAMOE_DEBUG.get() or envs.SGLANG_MEGAMOE_PAD_TO_CAPACITY.get():
+        capacity = get_mega_moe_capacity(
+            runner_config, quant_config, group, num_tokens, dtype_mode
+        )
+
+    x_active_mask = None
+    if (
+        envs.SGLANG_MEGAMOE_PAD_TO_CAPACITY.get()
+        and capacity is not None
+        and capacity > num_tokens
+    ):
+        # The MegaMoE collective is sized once, at buffer creation. A3 expects
+        # every batch to reach that capacity with the extra rows masked out; a
+        # shorter batch leaves the tail of the communication domain undefined.
+        pad_rows = capacity - num_tokens
+        hidden_states = torch.cat(
+            (
+                hidden_states,
+                hidden_states.new_zeros((pad_rows, hidden_states.shape[1])),
+            ),
+            dim=0,
+        )
+        topk_ids = torch.cat(
+            (topk_ids, topk_ids.new_zeros((pad_rows, topk_ids.shape[1]))),
+            dim=0,
+        )
+        topk_weights = torch.cat(
+            (topk_weights, topk_weights.new_zeros((pad_rows, topk_weights.shape[1]))),
+            dim=0,
+        )
+        x_active_mask = torch.zeros(
+            capacity, dtype=torch.bool, device=hidden_states.device
+        )
+        x_active_mask[:num_tokens] = True
+        mega_moe_kwargs["x_active_mask"] = x_active_mask
+
+    if envs.SGLANG_MEGAMOE_DEBUG.get():
+        _log_mega_moe_call(
+            dtype_mode=dtype_mode,
+            quant_config=quant_config,
+            hidden_states=hidden_states,
+            topk_ids=topk_ids,
+            topk_weights=topk_weights,
+            w13_weights=w13_weights,
+            w2_weights=w2_weights,
+            scale_values=mega_moe_kwargs.get("l1_weights_sf"),
+            bias_values=mega_moe_kwargs.get("l1_bias"),
+            activation=activation,
+            activation_clamp=activation_clamp,
+            activation_params=activation_params,
+            capacity=capacity,
+            num_tokens=num_tokens,
+            padded=x_active_mask is not None,
+        )
+
     output, _ = mega_moe(
         hidden_states,
         topk_ids,
         topk_weights,
         w13_weights,
         w2_weights,
-        get_mega_moe_sym_buffer(
-            runner_config,
-            quant_config,
-            get_parallel().moe_ep_group.device_group,
-            hidden_states.shape[0],
-            dtype_mode,
-        ),
+        sym_buffer,
         **mega_moe_kwargs,
     )
     return output

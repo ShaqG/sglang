@@ -1447,6 +1447,12 @@ class Envs:
     # read by several call sites; do not use in new code.
     SGLANG_DEEPEP_BF16_DISPATCH = EnvBool(False)
     SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
+    # Diagnostic switches for the ascend_ops MegaMoE (fused_op) path.
+    # DEBUG logs the per-rank operator contract once per shape.
+    # PAD_TO_CAPACITY pads each batch to the SymmBuffer capacity and passes
+    # x_active_mask, which is what the A3 MegaMoE contract asks for.
+    SGLANG_MEGAMOE_DEBUG = EnvBool(False)
+    SGLANG_MEGAMOE_PAD_TO_CAPACITY = EnvBool(False)
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

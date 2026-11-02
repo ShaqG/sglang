@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 import torch
 
 from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+    get_mega_moe_sym_buffer,
     mega_moe_activation_args,
     mega_moe_quant_args,
     mega_moe_weight_list,
@@ -45,6 +46,64 @@ class TestAscendOpsConfig(CustomTestCase):
 
 
 class TestAscendOpsDispatcherContracts(CustomTestCase):
+    def test_mega_moe_retries_uninitialized_ep_comm_without_caching(self):
+        """An unavailable EP communicator must not publish a reusable buffer."""
+        module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
+        cache = {}
+        ready = {"reduced": False, "synced": False}
+        backend = Mock()
+        backend.get_hccl_comm_name.side_effect = ["", "hccl_ep_comm"]
+        group = Mock()
+        group._get_backend.return_value = backend
+        buffer = object()
+
+        def all_reduce(probe, *, group):
+            ready["reduced"] = True
+
+        def synchronize(device):
+            self.assertTrue(ready["reduced"])
+            ready["synced"] = True
+
+        def create_buffer(actual_group, **kwargs):
+            self.assertIs(actual_group, group)
+            self.assertTrue(ready["synced"])
+            return buffer
+
+        provider = ModuleType("sgl_kernel_npu.modules.moe")
+        provider.get_symm_buffer_for_mega_moe = Mock(side_effect=create_buffer)
+        config = SimpleNamespace(
+            num_experts=256,
+            top_k=8,
+            hidden_size=6144,
+            intermediate_size_per_partition=2048,
+        )
+        cpu_device = torch.device("cpu")
+        probe = torch.ones(1)
+        npu = SimpleNamespace(current_device=lambda: 0, synchronize=synchronize)
+        with (
+            patch.dict("sys.modules", {provider.__name__: provider}),
+            patch(f"{module}._SYMM_BUFFER_CACHE", cache),
+            patch(f"{module}.torch.npu", npu, create=True),
+            patch(f"{module}.torch.device", return_value=cpu_device),
+            patch(f"{module}.torch.ones", return_value=probe),
+            patch(f"{module}.torch.distributed.all_reduce", side_effect=all_reduce),
+            patch(f"{module}.torch.distributed.get_rank", return_value=0),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "comm name is empty"):
+                get_mega_moe_sym_buffer(config, {}, group, 3, "normal")
+            self.assertEqual(cache, {})
+            self.assertEqual(provider.get_symm_buffer_for_mega_moe.call_count, 0)
+
+            self.assertIs(
+                get_mega_moe_sym_buffer(config, {}, group, 3, "normal"), buffer
+            )
+            ready.update(reduced=False, synced=False)
+            self.assertIs(
+                get_mega_moe_sym_buffer(config, {}, group, 2, "normal"), buffer
+            )
+            self.assertEqual(ready, {"reduced": False, "synced": False})
+            self.assertEqual(provider.get_symm_buffer_for_mega_moe.call_count, 1)
+
     def _dispatcher_for_quant_mode(self, quant_config=None):
         dispatcher = AscendOpsDispatcher.__new__(AscendOpsDispatcher)
         dispatcher.quant_config = quant_config or {}

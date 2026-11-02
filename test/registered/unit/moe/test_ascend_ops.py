@@ -50,23 +50,25 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         """An unavailable EP communicator must not publish a reusable buffer."""
         module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
         cache = {}
-        ready = {"reduced": False, "synced": False}
+        ready = {"initialized": False}
+        comm_names = iter(["", "hccl_ep_comm"])
         backend = Mock()
-        backend.get_hccl_comm_name.side_effect = ["", "hccl_ep_comm"]
         group = Mock()
         group._get_backend.return_value = backend
         buffer = object()
 
-        def all_reduce(probe, *, group):
-            ready["reduced"] = True
+        def get_comm_name(rank, *, init_comm):
+            self.assertEqual(rank, 0)
+            self.assertTrue(init_comm)
+            name = next(comm_names)
+            ready["initialized"] = bool(name)
+            return name
 
-        def synchronize(device):
-            self.assertTrue(ready["reduced"])
-            ready["synced"] = True
+        backend.get_hccl_comm_name.side_effect = get_comm_name
 
         def create_buffer(actual_group, **kwargs):
             self.assertIs(actual_group, group)
-            self.assertTrue(ready["synced"])
+            self.assertTrue(ready["initialized"])
             return buffer
 
         provider = ModuleType("sgl_kernel_npu.modules.moe")
@@ -78,15 +80,19 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             intermediate_size_per_partition=2048,
         )
         cpu_device = torch.device("cpu")
-        probe = torch.ones(1)
-        npu = SimpleNamespace(current_device=lambda: 0, synchronize=synchronize)
+        npu = SimpleNamespace(
+            current_device=lambda: 0,
+            synchronize=Mock(side_effect=AssertionError("Unexpected device sync")),
+        )
         with (
             patch.dict("sys.modules", {provider.__name__: provider}),
             patch(f"{module}._SYMM_BUFFER_CACHE", cache),
             patch(f"{module}.torch.npu", npu, create=True),
             patch(f"{module}.torch.device", return_value=cpu_device),
-            patch(f"{module}.torch.ones", return_value=probe),
-            patch(f"{module}.torch.distributed.all_reduce", side_effect=all_reduce),
+            patch(
+                f"{module}.torch.distributed.all_reduce",
+                side_effect=AssertionError("Unexpected device collective"),
+            ),
             patch(f"{module}.torch.distributed.get_rank", return_value=0),
         ):
             with self.assertRaisesRegex(RuntimeError, "comm name is empty"):
@@ -97,11 +103,11 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             self.assertIs(
                 get_mega_moe_sym_buffer(config, {}, group, 3, "normal"), buffer
             )
-            ready.update(reduced=False, synced=False)
+            ready["initialized"] = False
             self.assertIs(
                 get_mega_moe_sym_buffer(config, {}, group, 2, "normal"), buffer
             )
-            self.assertEqual(ready, {"reduced": False, "synced": False})
+            self.assertEqual(ready, {"initialized": False})
             self.assertEqual(provider.get_symm_buffer_for_mega_moe.call_count, 1)
 
     def _dispatcher_for_quant_mode(self, quant_config=None):

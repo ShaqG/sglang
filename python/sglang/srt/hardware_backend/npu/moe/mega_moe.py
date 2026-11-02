@@ -213,21 +213,17 @@ def get_mega_moe_sym_buffer(
     if state is not None and state[0] == max_tokens:
         return state[1]
     if state is None:
-        # NPU EP uses a separate process group from TP, so TP collectives do
-        # not initialize the communicator that MegaMoE looks up by HCCL name.
+        # CANN looks up the EP communicator with init_comm=False. Initialize
+        # it here before constructing SymmBuffer, without a device collective.
         device = torch.device("npu", torch.npu.current_device())
-        probe = torch.ones(1, dtype=torch.float32, device=device)
-        torch.distributed.all_reduce(probe, group=group)
-        torch.npu.synchronize(device)
-
         backend = group._get_backend(device)
         ep_rank = torch.distributed.get_rank(group)
         if hasattr(backend, "get_hccl_comm_name"):
-            comm_name = backend.get_hccl_comm_name(ep_rank)
+            comm_name = backend.get_hccl_comm_name(ep_rank, init_comm=True)
         else:
-            comm_name = group.get_hccl_comm_name(ep_rank)
+            comm_name = group.get_hccl_comm_name(ep_rank, init_comm=True)
         if not comm_name:
-            raise RuntimeError("MegaMoE EP HCCL comm name is empty after warmup")
+            raise RuntimeError("MegaMoE EP HCCL comm name is empty after initialization")
     if state is not None and hasattr(state[1], "destroy"):
         state[1].destroy()
     buffer = get_symm_buffer_for_mega_moe(

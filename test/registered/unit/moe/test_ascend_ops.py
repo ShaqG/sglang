@@ -50,23 +50,25 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         """An unavailable EP communicator must not publish a reusable buffer."""
         module = "sglang.srt.hardware_backend.npu.moe.mega_moe"
         cache = {}
-        ready = {"reduced": False, "synced": False}
+        ready = {"initialized": False}
+        comm_names = iter(["", "hccl_ep_comm"])
         backend = Mock()
-        backend.get_hccl_comm_name.side_effect = ["", "hccl_ep_comm"]
         group = Mock()
         group._get_backend.return_value = backend
         buffer = object()
 
-        def all_reduce(probe, *, group):
-            ready["reduced"] = True
+        def get_comm_name(rank, *, init_comm):
+            self.assertEqual(rank, 0)
+            self.assertTrue(init_comm)
+            name = next(comm_names)
+            ready["initialized"] = bool(name)
+            return name
 
-        def synchronize(device):
-            self.assertTrue(ready["reduced"])
-            ready["synced"] = True
+        backend.get_hccl_comm_name.side_effect = get_comm_name
 
         def create_buffer(actual_group, **kwargs):
             self.assertIs(actual_group, group)
-            self.assertTrue(ready["synced"])
+            self.assertTrue(ready["initialized"])
             return buffer
 
         provider = ModuleType("sgl_kernel_npu.modules.moe")
@@ -78,15 +80,19 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             intermediate_size_per_partition=2048,
         )
         cpu_device = torch.device("cpu")
-        probe = torch.ones(1)
-        npu = SimpleNamespace(current_device=lambda: 0, synchronize=synchronize)
+        npu = SimpleNamespace(
+            current_device=lambda: 0,
+            synchronize=Mock(side_effect=AssertionError("Unexpected device sync")),
+        )
         with (
             patch.dict("sys.modules", {provider.__name__: provider}),
             patch(f"{module}._SYMM_BUFFER_CACHE", cache),
             patch(f"{module}.torch.npu", npu, create=True),
             patch(f"{module}.torch.device", return_value=cpu_device),
-            patch(f"{module}.torch.ones", return_value=probe),
-            patch(f"{module}.torch.distributed.all_reduce", side_effect=all_reduce),
+            patch(
+                f"{module}.torch.distributed.all_reduce",
+                side_effect=AssertionError("Unexpected device collective"),
+            ),
             patch(f"{module}.torch.distributed.get_rank", return_value=0),
         ):
             with self.assertRaisesRegex(RuntimeError, "comm name is empty"):
@@ -97,17 +103,58 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
             self.assertIs(
                 get_mega_moe_sym_buffer(config, {}, group, 3, "normal"), buffer
             )
-            ready.update(reduced=False, synced=False)
+            ready["initialized"] = False
             self.assertIs(
                 get_mega_moe_sym_buffer(config, {}, group, 2, "normal"), buffer
             )
-            self.assertEqual(ready, {"reduced": False, "synced": False})
+            self.assertEqual(ready, {"initialized": False})
             self.assertEqual(provider.get_symm_buffer_for_mega_moe.call_count, 1)
 
     def _dispatcher_for_quant_mode(self, quant_config=None):
         dispatcher = AscendOpsDispatcher.__new__(AscendOpsDispatcher)
         dispatcher.quant_config = quant_config or {}
+        dispatcher.tp_group = object()
+        dispatcher.ep_group = object()
+        dispatcher.moe_ascend_ops_config = AscendOpsConfig()
         return dispatcher
+
+    def test_fused_op_selects_group_for_prefill_and_decode(self):
+        module = "sglang.srt.layers.moe.token_dispatcher.ascend_ops"
+        hidden_states = torch.zeros((3, 4))
+        topk_output = (
+            torch.ones((3, 2)),
+            torch.zeros((3, 2), dtype=torch.int32),
+            None,
+        )
+        cases = (
+            ("fused_op", "low_latency", True, "tp_group"),
+            ("allgather", "fused_op", False, "ep_group"),
+            ("fused_op", "fused_op", True, "ep_group"),
+            ("fused_op", "fused_op", False, "ep_group"),
+        )
+        for prefill, decode, is_extend, group_name in cases:
+            with (
+                self.subTest(prefill=prefill, decode=decode, is_extend=is_extend),
+                patch(f"{module}.get_is_extend_in_batch", return_value=is_extend),
+                patch(f"{module}.is_dp_attention_enabled", return_value=False),
+                patch(
+                    f"{module}.get_parallel",
+                    return_value=SimpleNamespace(attn_dp_size=1, attn_cp_size=1),
+                ),
+                patch(f"{module}.dist.get_world_size", return_value=16),
+            ):
+                dispatcher = self._dispatcher_for_quant_mode()
+                dispatcher.moe_ascend_ops_config = AscendOpsConfig(
+                    prefill=prefill, decode=decode
+                )
+                output = dispatcher.dispatch(hidden_states, topk_output)
+                self.assertIs(
+                    output.forward_state.group, getattr(dispatcher, group_name)
+                )
+                self.assertEqual(
+                    output.forward_state.dtype_mode,
+                    "normal" if is_extend else "low_latency",
+                )
 
     # Protects mode-specific quantization settings from being ignored in favor
     # of the shared dispatcher dtype.
@@ -215,6 +262,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         hidden_states = torch.zeros((1, 4))
         topk_weights = torch.ones((1, 2))
         topk_ids = torch.zeros((1, 2), dtype=torch.int32)
+        group = object()
 
         with patch.dict(
             "sys.modules",
@@ -231,15 +279,14 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         ), patch(
             "sglang.srt.hardware_backend.npu.moe.mega_moe.get_mega_moe_sym_buffer",
             return_value="sym_buffer",
-        ), patch(
-            "sglang.srt.runtime_context.get_parallel",
-        ):
+        ) as get_buffer:
             result = run_mega_moe(
                 runner_config,
                 {"dispatcher_output_dtype": "bf16"},
                 hidden_states,
                 topk_weights,
                 topk_ids,
+                group=group,
             )
 
         self.assertEqual(result, "output")
@@ -250,6 +297,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         self.assertEqual(len(args[3]), 2)
         self.assertEqual(len(args[4]), 2)
         self.assertEqual(args[5], "sym_buffer")
+        self.assertIs(get_buffer.call_args.args[2], group)
         self.assertEqual(len(kwargs["l1_weights_sf"]), 2)
         self.assertEqual(len(kwargs["l2_weights_sf"]), 2)
         self.assertEqual(kwargs["activation"], "swiglu")
@@ -263,6 +311,7 @@ class TestAscendOpsDispatcherContracts(CustomTestCase):
         state = _MegaMoEState(
             topk_weights=torch.ones((1, 2)),
             topk_ids=torch.zeros((1, 2), dtype=torch.int32),
+            group=dispatcher.ep_group,
         )
 
         with patch.object(

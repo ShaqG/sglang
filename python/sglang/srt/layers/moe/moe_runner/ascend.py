@@ -262,7 +262,8 @@ class AscendRunnerCore(MoeRunnerCore):
                     x,
                     mega_moe_state.topk_weights,
                     mega_moe_state.topk_ids,
-                    mega_moe_state.dtype_mode,
+                    group=mega_moe_state.group,
+                    dtype_mode=mega_moe_state.dtype_mode,
                 )
                 if mega_moe_state.num_valid_rows is not None:
                     output = output[: mega_moe_state.num_valid_rows]

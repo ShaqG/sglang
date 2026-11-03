@@ -6,6 +6,7 @@ AllGather, AllToAllV, MC2, and MegaMoE dispatch boundaries.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Optional
 
@@ -38,6 +39,11 @@ from sglang.srt.layers.moe.topk import TopKOutput
 from sglang.srt.layers.moe.utils import AscendOpsConfig, DispatcherOutputDtype
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.utils import is_npu
+
+logger = logging.getLogger(__name__)
+
+# (mode, rank) pairs that already logged their combine magnitude.
+_COMBINE_DEBUG_SEEN: set = set()
 
 if is_npu():
     import torch_npu
@@ -293,12 +299,33 @@ class AscendOpsDispatcher(BaseDispatcher):
         if isinstance(state, _AllGatherState):
             return self._combine_all_gather(combine_input.hidden_states, state)
         if isinstance(state, _AllToAllVState):
-            return self._combine_all_to_all_v(combine_input.hidden_states, state)
+            output = self._combine_all_to_all_v(
+                combine_input.hidden_states, state
+            )
+            self._debug_log_combine("alltoallv", output)
+            return output
         if isinstance(state, _MC2State):
             return self._combine_mc2(combine_input.hidden_states, state)
         if isinstance(state, _MegaMoEState):
             return self._combine_megamoe(combine_input.hidden_states, state)
         raise TypeError(f"unknown Ascend Ops forward state: {type(state)!r}")
+
+    @staticmethod
+    def _debug_log_combine(mode: str, output: torch.Tensor) -> None:
+        """One-shot magnitude snapshot used to compare prefill backends."""
+
+        if not envs.SGLANG_MEGAMOE_DEBUG.get():
+            return
+
+        from sglang.srt.hardware_backend.npu.moe.mega_moe import _tensor_stats
+
+        rank = dist.get_rank() if dist.is_initialized() else None
+        key = (mode, rank)
+        if key in _COMBINE_DEBUG_SEEN:
+            return
+        _COMBINE_DEBUG_SEEN.add(key)
+        logger.info("[ascend-ops-combine] mode=%s rank=%s %s", mode, rank,
+                    _tensor_stats("out", output))
 
     # Decode (MC2 low latency)
 

@@ -173,7 +173,23 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
     return scale.reshape(-1)
 
 
-def mega_moe_scale_list(layer, name: str, expected_len: int):
+def mega_moe_uses_mxfp_scales(layer) -> bool:
+    """Whether the layer keeps E8M0 block scales instead of packed INT64."""
+
+    from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
+        NPUMXFP8MoEMethod,
+        NPUW4A8MXFP4MoEMethod,
+    )
+
+    return isinstance(
+        getattr(layer, "w2_kernel", None),
+        (NPUMXFP8MoEMethod, NPUW4A8MXFP4MoEMethod),
+    )
+
+
+def mega_moe_scale_list(
+    layer, name: str, expected_len: int, *, mxfp: bool = False
+):
     """Return per-expert scales in the format required by MegaMoE.
 
     The normal Ascend grouped matmul path keeps scales in a stacked tensor and
@@ -188,10 +204,15 @@ def mega_moe_scale_list(layer, name: str, expected_len: int):
         value = getattr(layer, f"{name}_inv", None)
     if value is None:
         return None
-    return [
-        _pack_mega_moe_scale(item)
-        for item in mega_moe_weight_list(value, expected_len)
-    ]
+    items = list(mega_moe_weight_list(value, expected_len))
+    if mxfp:
+        # A5 keeps E8M0 block scales as [rows, K/64, 2]; the operator wants the
+        # typed view, not the packed uint64 form used by the INT paths.
+        e8m0 = getattr(torch, "float8_e8m0fnu", None)
+        if e8m0 is not None:
+            items = [item.view(e8m0) if item.dtype == torch.uint8 else item for item in items]
+        return items
+    return [_pack_mega_moe_scale(item) for item in items]
 
 
 def mega_moe_weight_type(layer):
@@ -621,12 +642,13 @@ def run_mega_moe(
     activation, activation_clamp, activation_params = mega_moe_activation_args(
         runner_config
     )
+    mxfp_scales = mega_moe_uses_mxfp_scales(layer)
     mega_moe_kwargs = dict(
         l1_weights_sf=mega_moe_scale_list(
-            layer, "w13_weight_scale", len(w13_weights)
+            layer, "w13_weight_scale", len(w13_weights), mxfp=mxfp_scales
         ),
         l2_weights_sf=mega_moe_scale_list(
-            layer, "w2_weight_scale", len(w13_weights)
+            layer, "w2_weight_scale", len(w13_weights), mxfp=mxfp_scales
         ),
         l1_bias=mega_moe_bias_list(layer, "w13", len(w13_weights)),
         l2_bias=mega_moe_bias_list(layer, "w2", len(w13_weights)),

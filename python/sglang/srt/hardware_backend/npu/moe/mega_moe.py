@@ -332,7 +332,11 @@ def _describe_tensors(values) -> str:
 
 
 def _tensor_stats(name: str, value) -> str:
-    """Scalar summary used to spot NaN/Inf or wrong scale magnitudes."""
+    """Scalar summary used to spot NaN/Inf or wrong magnitudes.
+
+    Only ND tensors are accepted: FRACTAL_NZ weights would need a TransData op,
+    which is not safe to insert from this stream context.
+    """
 
     if value is None:
         return f"{name}=None"
@@ -340,24 +344,23 @@ def _tensor_stats(name: str, value) -> str:
         if not value:
             return f"{name}=empty"
         value = value[0]
-    float_value = value.float()
-    return (
-        f"{name}[min={float_value.min().item():.4g}"
-        f" max={float_value.max().item():.4g}"
-        f" absmean={float_value.abs().mean().item():.4g}"
-        f" nan={int(torch.isnan(float_value).sum().item())}"
-        f" inf={int(torch.isinf(float_value).sum().item())}]"
-    )
+    try:
+        float_value = value.float()
+        return (
+            f"{name}[min={float_value.min().item():.4g}"
+            f" max={float_value.max().item():.4g}"
+            f" absmean={float_value.abs().mean().item():.4g}"
+            f" nan={int(torch.isnan(float_value).sum().item())}"
+            f" inf={int(torch.isinf(float_value).sum().item())}]"
+        )
+    except Exception as exc:  # diagnostics must never break serving
+        return f"{name}=<stats failed: {type(exc).__name__}>"
 
 
 def _log_mega_moe_stats(
     *,
     hidden_states,
     output,
-    w13_weights,
-    w2_weights,
-    scale_values,
-    scale_values2,
     bias_values,
     bias_values2,
     raw_scale,
@@ -376,9 +379,6 @@ def _log_mega_moe_stats(
         _tensor_stats("out", output),
         f"raw_scale={_describe_tensors(raw_scale)}",
         f"raw_scale2={_describe_tensors(raw_scale2)}",
-        _tensor_stats("w13", w13_weights),
-        _tensor_stats("scale", scale_values),
-        _tensor_stats("scale2", scale_values2),
         _tensor_stats("bias", bias_values),
         _tensor_stats("bias2", bias_values2),
     ]
@@ -576,10 +576,6 @@ def run_mega_moe(
         _log_mega_moe_stats(
             hidden_states=hidden_states,
             output=output,
-            w13_weights=w13_weights,
-            w2_weights=w2_weights,
-            scale_values=mega_moe_kwargs.get("l1_weights_sf"),
-            scale_values2=mega_moe_kwargs.get("l2_weights_sf"),
             bias_values=mega_moe_kwargs.get("l1_bias"),
             bias_values2=mega_moe_kwargs.get("l2_bias"),
             raw_scale=getattr(layer, "w13_weight_scale", None),

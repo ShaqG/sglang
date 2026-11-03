@@ -538,6 +538,7 @@ def _log_mega_moe_call(
     capacity,
     num_tokens,
     mask,
+    layer=None,
 ) -> None:
     """Log the operator contract once per distinct shape (diagnostic only)."""
 
@@ -561,6 +562,12 @@ def _log_mega_moe_call(
         "clamp": activation_clamp,
         "act_params": activation_params,
         "variant": envs.SGLANG_MEGAMOE_VARIANT.get() or "none",
+        "kernel": type(getattr(layer, "w2_kernel", None)).__name__,
+        "scale_attrs": (
+            ",".join(sorted(name for name in dir(layer) if "scale" in name))
+            if layer is not None
+            else "?"
+        ),
     }
     key = tuple(sorted((name, repr(value)) for name, value in fields.items()))
     if key in _DEBUG_SEEN or len(_DEBUG_SEEN) >= 32:
@@ -706,6 +713,7 @@ def run_mega_moe(
             capacity=capacity,
             num_tokens=num_tokens,
             mask=x_active_mask,
+            layer=layer,
         )
 
     output, _ = mega_moe(

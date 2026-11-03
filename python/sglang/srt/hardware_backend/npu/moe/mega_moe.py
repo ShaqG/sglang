@@ -349,12 +349,14 @@ def _tensor_stats(name: str, value) -> str:
         value = value[0]
     try:
         float_value = value.float()
+        head = [round(item, 6) for item in float_value.flatten()[:4].tolist()]
         return (
             f"{name}[min={float_value.min().item():.4g}"
             f" max={float_value.max().item():.4g}"
             f" absmean={float_value.abs().mean().item():.4g}"
             f" nan={int(torch.isnan(float_value).sum().item())}"
-            f" inf={int(torch.isinf(float_value).sum().item())}]"
+            f" inf={int(torch.isinf(float_value).sum().item())}"
+            f" head={head}]"
         )
     except Exception as exc:  # diagnostics must never break serving
         return f"{name}=<stats failed: {type(exc).__name__}>"

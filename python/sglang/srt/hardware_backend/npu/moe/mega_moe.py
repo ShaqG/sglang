@@ -22,6 +22,9 @@ _DEBUG_SEEN: set[tuple] = set()
 # Ranks that already emitted the numeric snapshot.
 _STATS_SEEN: set = set()
 
+# Ranks that already ran the local-expert probe.
+_PROBE_SEEN: set = set()
+
 
 _MEGA_MOE_SUPPORTED_KERNELS_MSG = (
     "ascend_ops fused_op supports NPUUnquantMoEMethod, "
@@ -581,4 +584,36 @@ def run_mega_moe(
             raw_scale=getattr(layer, "w13_weight_scale", None),
             raw_scale2=getattr(layer, "w2_weight_scale", None),
         )
+
+    if envs.SGLANG_MEGAMOE_PROBE.get():
+        # Route every row to one local expert with weights summing to one: the
+        # result is that expert's full output, independent of routing/combine.
+        rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_initialized()
+            else None
+        )
+        if rank not in _PROBE_SEEN:
+            _PROBE_SEEN.add(rank)
+            ep_rank = torch.distributed.get_rank(group)
+            local_experts = len(w13_weights)
+            probe_ids = torch.full_like(topk_ids, ep_rank * local_experts)
+            probe_weights = torch.full_like(
+                topk_weights, 1.0 / max(1, int(topk_ids.shape[1]))
+            )
+            probe_out, _ = mega_moe(
+                hidden_states,
+                probe_ids,
+                probe_weights,
+                w13_weights,
+                w2_weights,
+                sym_buffer,
+                **mega_moe_kwargs,
+            )
+            logger.info(
+                "[megamoe-probe] rank=%s local_expert=%s %s",
+                rank,
+                ep_rank * local_experts,
+                _tensor_stats("out", probe_out),
+            )
     return output

@@ -537,6 +537,7 @@ def _log_mega_moe_call(
         "act": activation,
         "clamp": activation_clamp,
         "act_params": activation_params,
+        "variant": envs.SGLANG_MEGAMOE_VARIANT.get() or "none",
     }
     key = tuple(sorted((name, repr(value)) for name, value in fields.items()))
     if key in _DEBUG_SEEN or len(_DEBUG_SEEN) >= 32:

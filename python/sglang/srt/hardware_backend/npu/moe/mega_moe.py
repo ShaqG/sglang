@@ -471,7 +471,28 @@ def _apply_mega_moe_variant(name: str, layer_key, w13_weights, mega_moe_kwargs):
             _SWAPPED_W13_CACHE[layer_key] = cached
         mega_moe_kwargs["l1_weights_sf"] = cached[1]
         mega_moe_kwargs["l1_bias"] = cached[2]
+        logger.info("[megamoe-variant] applied %s", name)
         return cached[0]
+
+    if name == "nibble_swap":
+        # Element-wise bit swap of the two int4 halves inside every byte, i.e.
+        # the opposite nibble order when unpacking the packed weights.
+        swapped = []
+        for weight in w13_weights:
+            int32 = weight.view(torch.int32)
+            low = (int32 & 0x0F0F0F0F) << 4
+            high = (int32 >> 4) & 0x0F0F0F0F
+            swapped.append((low | high).view(weight.dtype))
+        logger.info("[megamoe-variant] applied %s", name)
+        return swapped
+
+    if name == "reverse_experts":
+        for field in ("l1_weights_sf", "l2_weights_sf", "l1_bias", "l2_bias"):
+            values = mega_moe_kwargs.get(field)
+            if values is not None:
+                mega_moe_kwargs[field] = list(reversed(values))
+        logger.info("[megamoe-variant] applied %s", name)
+        return list(reversed(w13_weights))
 
     raise ValueError(f"unknown MegaMoE variant {name!r}")
 

@@ -227,6 +227,28 @@ def get_mega_moe_capacity(
     return max(num_tokens, state[0] if state is not None else 1)
 
 
+def _padded_capacity(num_tokens: int) -> Optional[int]:
+    """Fixed capacity the batch is padded to, or None when padding is off.
+
+    A3 MegaMoE expects every rank to enter with the same capacity and marks the
+    real rows with ``x_active_mask``; the value therefore has to come from a
+    configuration every rank shares, never from local history.
+    """
+
+    if not envs.SGLANG_MEGAMOE_PAD_TO_CAPACITY.get():
+        return None
+    capacity = envs.SGLANG_MEGAMOE_MAX_TOKENS_PER_RANK.get()
+    if capacity <= 0:
+        return None
+    if num_tokens > capacity:
+        raise ValueError(
+            f"MegaMoE got {num_tokens} rows on this rank but the fixed capacity "
+            f"is {capacity}; lower the prefill chunk or raise "
+            "SGLANG_MEGAMOE_MAX_TOKENS_PER_RANK (A3 limit: 4096)."
+        )
+    return capacity
+
+
 def get_mega_moe_sym_buffer(
     runner_config,
     quant_config,
@@ -241,7 +263,11 @@ def get_mega_moe_sym_buffer(
     key = _symm_buffer_key(runner_config, quant_config, group, dtype_mode)
     quant_mode, quant_dtype = key[5], key[6]
     state = _SYMM_BUFFER_CACHE.get(key)
-    max_tokens = max(num_tokens, state[0] if state is not None else 1)
+    fixed_capacity = _padded_capacity(num_tokens)
+    if fixed_capacity is not None:
+        max_tokens = fixed_capacity
+    else:
+        max_tokens = max(num_tokens, state[0] if state is not None else 1)
     if state is not None and state[0] == max_tokens:
         return state[1]
     if state is None:
@@ -305,7 +331,7 @@ def _log_mega_moe_call(
     activation_params,
     capacity,
     num_tokens,
-    padded,
+    mask,
 ) -> None:
     """Log the operator contract once per distinct shape (diagnostic only)."""
 
@@ -316,7 +342,7 @@ def _log_mega_moe_call(
         "tokens": num_tokens,
         "rows": int(hidden_states.shape[0]),
         "capacity": capacity,
-        "padded": padded,
+        "mask": _describe_tensors(mask),
         "x": f"{tuple(hidden_states.shape)}/{hidden_states.dtype}",
         "topk": f"{tuple(topk_ids.shape)}/{topk_ids.dtype}/{topk_weights.dtype}",
         "experts": f"{len(w13_weights)}x{tuple(w13_weights[0].shape)}"
@@ -401,45 +427,48 @@ def run_mega_moe(
         mega_moe_kwargs["activation_params"] = activation_params
 
     num_tokens = hidden_states.shape[0]
+    pad_capacity = _padded_capacity(num_tokens)
     sym_buffer = get_mega_moe_sym_buffer(
         runner_config, quant_config, group, num_tokens, dtype_mode
     )
 
-    capacity = None
-    if envs.SGLANG_MEGAMOE_DEBUG.get() or envs.SGLANG_MEGAMOE_PAD_TO_CAPACITY.get():
+    quant_mode, _ = mega_moe_quant_args(quant_config, dtype_mode)
+    is_mxfp = quant_mode == 4
+
+    capacity = pad_capacity
+    if capacity is None and envs.SGLANG_MEGAMOE_DEBUG.get():
         capacity = get_mega_moe_capacity(
             runner_config, quant_config, group, num_tokens, dtype_mode
         )
 
     x_active_mask = None
-    if (
-        envs.SGLANG_MEGAMOE_PAD_TO_CAPACITY.get()
-        and capacity is not None
-        and capacity > num_tokens
-    ):
-        # The MegaMoE collective is sized once, at buffer creation. A3 expects
-        # every batch to reach that capacity with the extra rows masked out; a
-        # shorter batch leaves the tail of the communication domain undefined.
-        pad_rows = capacity - num_tokens
-        hidden_states = torch.cat(
-            (
-                hidden_states,
-                hidden_states.new_zeros((pad_rows, hidden_states.shape[1])),
-            ),
-            dim=0,
-        )
-        topk_ids = torch.cat(
-            (topk_ids, topk_ids.new_zeros((pad_rows, topk_ids.shape[1]))),
-            dim=0,
-        )
-        topk_weights = torch.cat(
-            (topk_weights, topk_weights.new_zeros((pad_rows, topk_weights.shape[1]))),
-            dim=0,
-        )
+    if pad_capacity is not None and not is_mxfp:
+        # A3 expects every rank to reach the fixed capacity with the extra rows
+        # marked inactive; MX paths instead pass the batch at its real length.
+        if pad_capacity > num_tokens:
+            pad_rows = pad_capacity - num_tokens
+            hidden_states = torch.cat(
+                (
+                    hidden_states,
+                    hidden_states.new_zeros((pad_rows, hidden_states.shape[1])),
+                ),
+                dim=0,
+            )
+            topk_ids = torch.cat(
+                (topk_ids, topk_ids.new_zeros((pad_rows, topk_ids.shape[1]))),
+                dim=0,
+            )
+            topk_weights = torch.cat(
+                (
+                    topk_weights,
+                    topk_weights.new_zeros((pad_rows, topk_weights.shape[1])),
+                ),
+                dim=0,
+            )
         x_active_mask = torch.zeros(
-            capacity, dtype=torch.bool, device=hidden_states.device
+            pad_capacity, dtype=torch.int8, device=hidden_states.device
         )
-        x_active_mask[:num_tokens] = True
+        x_active_mask[:num_tokens] = 1
         mega_moe_kwargs["x_active_mask"] = x_active_mask
 
     if envs.SGLANG_MEGAMOE_DEBUG.get():
@@ -458,7 +487,7 @@ def run_mega_moe(
             activation_params=activation_params,
             capacity=capacity,
             num_tokens=num_tokens,
-            padded=x_active_mask is not None,
+            mask=x_active_mask,
         )
 
     output, _ = mega_moe(

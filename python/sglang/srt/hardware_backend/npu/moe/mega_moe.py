@@ -643,6 +643,19 @@ def run_mega_moe(
         runner_config
     )
     mxfp_scales = mega_moe_uses_mxfp_scales(layer)
+    l1_bias = mega_moe_bias_list(layer, "w13", len(w13_weights))
+    l2_bias = mega_moe_bias_list(layer, "w2", len(w2_weights))
+    if mxfp_scales:
+        # Packed-FP4 weights have no zero point, but the A5 prototype still
+        # lists bias as a required input, so pass zeros.
+        l1_bias = l1_bias or [
+            torch.zeros(weight.shape[-1], dtype=torch.float32, device=weight.device)
+            for weight in w13_weights
+        ]
+        l2_bias = l2_bias or [
+            torch.zeros(weight.shape[-1], dtype=torch.float32, device=weight.device)
+            for weight in w2_weights
+        ]
     mega_moe_kwargs = dict(
         l1_weights_sf=mega_moe_scale_list(
             layer, "w13_weight_scale", len(w13_weights), mxfp=mxfp_scales
@@ -650,8 +663,8 @@ def run_mega_moe(
         l2_weights_sf=mega_moe_scale_list(
             layer, "w2_weight_scale", len(w13_weights), mxfp=mxfp_scales
         ),
-        l1_bias=mega_moe_bias_list(layer, "w13", len(w13_weights)),
-        l2_bias=mega_moe_bias_list(layer, "w2", len(w13_weights)),
+        l1_bias=l1_bias,
+        l2_bias=l2_bias,
         activation=activation,
         activation_clamp=activation_clamp,
     )

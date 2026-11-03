@@ -1470,6 +1470,9 @@ class Envs:
     # keeps the configured behaviour. Values: swap_w13_halves, bias_mul8,
     # bias_div8, scale_marker.
     SGLANG_MEGAMOE_VARIANT = EnvStr("")
+    # Feeds float16 activations to the fused op; the FP4 weight path reports a
+    # float16 output prototype while the model runs in bfloat16.
+    SGLANG_MEGAMOE_FP16_ACT = EnvBool(False)
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

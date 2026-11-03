@@ -650,6 +650,13 @@ def run_mega_moe(
         mega_moe_kwargs["weight1_type"] = weight_type
         mega_moe_kwargs["weight2_type"] = weight_type
 
+    input_dtype = None
+    if envs.SGLANG_MEGAMOE_FP16_ACT.get():
+        # The FP4 weight path reports a float16 output prototype, so feed it
+        # float16 activations and restore the model dtype afterwards.
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float16)
+
     w13_weights = _apply_mega_moe_variant(
         envs.SGLANG_MEGAMOE_VARIANT.get(), id(layer), w13_weights, mega_moe_kwargs
     )
@@ -729,6 +736,8 @@ def run_mega_moe(
         sym_buffer,
         **mega_moe_kwargs,
     )
+    if input_dtype is not None and output.dtype != input_dtype:
+        output = output.to(input_dtype)
     if envs.SGLANG_MEGAMOE_DEBUG.get():
         _log_mega_moe_stats(
             hidden_states=hidden_states,

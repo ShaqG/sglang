@@ -183,6 +183,10 @@ def mega_moe_scale_list(layer, name: str, expected_len: int):
 
     value = getattr(layer, name, None)
     if value is None:
+        # MXFP checkpoints store the block scale under the ``_inv`` name; the
+        # shared A5 GMM path passes the same tensor as its weight scale.
+        value = getattr(layer, f"{name}_inv", None)
+    if value is None:
         return None
     return [
         _pack_mega_moe_scale(item)

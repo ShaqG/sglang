@@ -402,11 +402,36 @@ def _repack_marker_scales(values):
     ]
 
 
-def _mega_moe_variants(base_kwargs: dict) -> dict:
+def _swap_last_halves(t: torch.Tensor) -> torch.Tensor:
+    half = t.shape[-1] // 2
+    return torch.cat((t[..., half:], t[..., :half]), dim=-1).contiguous()
+
+
+def _swap_w13_layout(weights, scales, bias):
+    """Move the gate/up halves of w13 to the other side of the split."""
+
+    from sglang.srt.hardware_backend.npu.utils import NPUACLFormat, npu_format_cast
+
+    swapped_weights = []
+    for weight in weights:
+        nd = npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND)
+        nd = _swap_last_halves(nd)
+        swapped_weights.append(
+            npu_format_cast(nd, NPUACLFormat.ACL_FORMAT_FRACTAL_NZ)
+        )
+    swapped_scales = (
+        None if scales is None else [_swap_last_halves(item) for item in scales]
+    )
+    swapped_bias = None if bias is None else [_swap_last_halves(item) for item in bias]
+    return swapped_weights, swapped_scales, swapped_bias
+
+
+def _mega_moe_variants(base_kwargs: dict, w13_weights) -> dict:
     """Competing interpretations of the same operator inputs.
 
-    ``bias=None`` is intentionally absent: the A3 tiling rejects it for W4A8,
-    and the failure takes the whole scheduler down.
+    Returns ``name -> (l1_weights, kwargs)``. ``bias=None`` is intentionally
+    absent: the A3 tiling rejects it for W4A8 and the failure takes the whole
+    scheduler down.
     """
 
     def scaled(kwargs, factor):
@@ -420,12 +445,20 @@ def _mega_moe_variants(base_kwargs: dict) -> dict:
     marker["l1_weights_sf"] = _repack_marker_scales(marker.get("l1_weights_sf"))
     marker["l2_weights_sf"] = _repack_marker_scales(marker.get("l2_weights_sf"))
 
+    swapped_weights, swapped_scales, swapped_bias = _swap_w13_layout(
+        w13_weights,
+        base_kwargs.get("l1_weights_sf"),
+        base_kwargs.get("l1_bias"),
+    )
+    swapped = dict(base_kwargs)
+    swapped["l1_weights_sf"] = swapped_scales
+    swapped["l1_bias"] = swapped_bias
+
     return {
-        "scale_marker": marker,
-        "bias_div8": scaled(base_kwargs, 1.0 / 8.0),
-        "bias_mul8": scaled(base_kwargs, 8.0),
-        "bias_neg": scaled(base_kwargs, -1.0),
-        "scale_marker_bias_div8": scaled(marker, 1.0 / 8.0),
+        "swap_w13_halves": (swapped_weights, swapped),
+        "bias_mul8": (w13_weights, scaled(base_kwargs, 8.0)),
+        "bias_div8": (w13_weights, scaled(base_kwargs, 1.0 / 8.0)),
+        "scale_marker": (w13_weights, marker),
     }
 
 
@@ -645,13 +678,15 @@ def run_mega_moe(
         )
         if rank not in _VARIANTS_SEEN:
             _VARIANTS_SEEN.add(rank)
-            for name, override in _mega_moe_variants(mega_moe_kwargs).items():
+            for name, (variant_w13, override) in _mega_moe_variants(
+                mega_moe_kwargs, w13_weights
+            ).items():
                 try:
                     variant_out, _ = mega_moe(
                         hidden_states,
                         topk_ids,
                         topk_weights,
-                        w13_weights,
+                        variant_w13,
                         w2_weights,
                         sym_buffer,
                         **override,

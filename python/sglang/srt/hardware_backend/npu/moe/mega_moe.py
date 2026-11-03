@@ -25,9 +25,6 @@ _STATS_SEEN: set = set()
 # Ranks that already ran the local-expert probe.
 _PROBE_SEEN: set = set()
 
-# Ranks that already ran the tensor-variant sweep.
-_VARIANTS_SEEN: set = set()
-
 
 _MEGA_MOE_SUPPORTED_KERNELS_MSG = (
     "ascend_ops fused_op supports NPUUnquantMoEMethod, "
@@ -432,40 +429,51 @@ def _swap_w13_layout(weights, scales, bias):
     return swapped_weights, swapped_scales, swapped_bias
 
 
-def _mega_moe_variants(base_kwargs: dict, w13_weights) -> dict:
-    """Competing interpretations of the same operator inputs.
+# Layer id -> swapped w13 tensors. Rebuilt once because the format casts are
+# expensive and must not run inside the serving loop.
+_SWAPPED_W13_CACHE: dict[int, tuple] = {}
 
-    Returns ``name -> (l1_weights, kwargs)``. ``bias=None`` is intentionally
-    absent: the A3 tiling rejects it for W4A8 and the failure takes the whole
-    scheduler down.
+
+def _apply_mega_moe_variant(name: str, layer_key, w13_weights, mega_moe_kwargs):
+    """Rewrite the operator inputs for one alternative interpretation.
+
+    Returns the w13 list to pass; keyword tensors are updated in place. Only
+    one variant is applied per run: a mismatched call desynchronises the
+    collectives and hangs the scheduler.
     """
 
-    def scaled(kwargs, factor):
-        out = dict(kwargs)
-        for name in ("l1_bias", "l2_bias"):
-            if out.get(name) is not None:
-                out[name] = [item * factor for item in out[name]]
-        return out
+    if not name:
+        return w13_weights
 
-    marker = dict(base_kwargs)
-    marker["l1_weights_sf"] = _repack_marker_scales(marker.get("l1_weights_sf"))
-    marker["l2_weights_sf"] = _repack_marker_scales(marker.get("l2_weights_sf"))
+    if name in ("bias_mul8", "bias_div8", "bias_neg"):
+        factor = {"bias_mul8": 8.0, "bias_div8": 1.0 / 8.0, "bias_neg": -1.0}[name]
+        for field in ("l1_bias", "l2_bias"):
+            values = mega_moe_kwargs.get(field)
+            if values is not None:
+                mega_moe_kwargs[field] = [item * factor for item in values]
+        return w13_weights
 
-    swapped_weights, swapped_scales, swapped_bias = _swap_w13_layout(
-        w13_weights,
-        base_kwargs.get("l1_weights_sf"),
-        base_kwargs.get("l1_bias"),
-    )
-    swapped = dict(base_kwargs)
-    swapped["l1_weights_sf"] = swapped_scales
-    swapped["l1_bias"] = swapped_bias
+    if name == "scale_marker":
+        for field in ("l1_weights_sf", "l2_weights_sf"):
+            mega_moe_kwargs[field] = _repack_marker_scales(
+                mega_moe_kwargs.get(field)
+            )
+        return w13_weights
 
-    return {
-        "swap_w13_halves": (swapped_weights, swapped),
-        "bias_mul8": (w13_weights, scaled(base_kwargs, 8.0)),
-        "bias_div8": (w13_weights, scaled(base_kwargs, 1.0 / 8.0)),
-        "scale_marker": (w13_weights, marker),
-    }
+    if name == "swap_w13_halves":
+        cached = _SWAPPED_W13_CACHE.get(layer_key)
+        if cached is None:
+            cached = _swap_w13_layout(
+                w13_weights,
+                mega_moe_kwargs.get("l1_weights_sf"),
+                mega_moe_kwargs.get("l1_bias"),
+            )
+            _SWAPPED_W13_CACHE[layer_key] = cached
+        mega_moe_kwargs["l1_weights_sf"] = cached[1]
+        mega_moe_kwargs["l1_bias"] = cached[2]
+        return cached[0]
+
+    raise ValueError(f"unknown MegaMoE variant {name!r}")
 
 
 def _log_mega_moe_call(
@@ -581,14 +589,9 @@ def run_mega_moe(
     if activation_params is not None:
         mega_moe_kwargs["activation_params"] = activation_params
 
-    if envs.SGLANG_MEGAMOE_NEGATE_BIAS.get():
-        for name in ("l1_bias", "l2_bias"):
-            values = mega_moe_kwargs.get(name)
-            if values is not None:
-                mega_moe_kwargs[name] = [-item for item in values]
-    if envs.SGLANG_MEGAMOE_NO_BIAS.get():
-        mega_moe_kwargs["l1_bias"] = None
-        mega_moe_kwargs["l2_bias"] = None
+    w13_weights = _apply_mega_moe_variant(
+        envs.SGLANG_MEGAMOE_VARIANT.get(), id(layer), w13_weights, mega_moe_kwargs
+    )
 
     num_tokens = hidden_states.shape[0]
     pad_capacity = _padded_capacity(num_tokens)
@@ -673,47 +676,6 @@ def run_mega_moe(
             raw_scale=getattr(layer, "w13_weight_scale", None),
             raw_scale2=getattr(layer, "w2_weight_scale", None),
         )
-
-    if envs.SGLANG_MEGAMOE_VARIANTS.get():
-        # Sweep the competing interpretations of the operator inputs in one
-        # run, so a single restart compares them against the alltoallv output.
-        rank = (
-            torch.distributed.get_rank()
-            if torch.distributed.is_initialized()
-            else None
-        )
-        if rank not in _VARIANTS_SEEN:
-            _VARIANTS_SEEN.add(rank)
-            try:
-                variants = _mega_moe_variants(mega_moe_kwargs, w13_weights)
-            except Exception as exc:
-                logger.warning("[megamoe-variant] build failed: %s", exc)
-                variants = {}
-            for name, (variant_w13, override) in variants.items():
-                try:
-                    variant_out, _ = mega_moe(
-                        hidden_states,
-                        topk_ids,
-                        topk_weights,
-                        variant_w13,
-                        w2_weights,
-                        sym_buffer,
-                        **override,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[megamoe-variant] rank=%s variant=%s failed: %s",
-                        rank,
-                        name,
-                        exc,
-                    )
-                    break
-                logger.info(
-                    "[megamoe-variant] rank=%s variant=%s %s",
-                    rank,
-                    name,
-                    _tensor_stats("out", variant_out),
-                )
 
     if envs.SGLANG_MEGAMOE_PROBE.get():
         # Route every row to one local expert with weights summing to one: the

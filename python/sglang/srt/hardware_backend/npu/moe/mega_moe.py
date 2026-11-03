@@ -19,6 +19,9 @@ _SYMM_BUFFER_CACHE: dict[tuple, tuple[int, object]] = {}
 # enough to keep the log readable.
 _DEBUG_SEEN: set[tuple] = set()
 
+# Ranks that already emitted the numeric snapshot.
+_STATS_SEEN: set = set()
+
 
 _MEGA_MOE_SUPPORTED_KERNELS_MSG = (
     "ascend_ops fused_op supports NPUUnquantMoEMethod, "
@@ -135,12 +138,22 @@ def mega_moe_bias_list(layer, prefix: str, expected_len: int):
     return None
 
 
+def _marker_pack_scale(scale_int64: torch.Tensor) -> torch.Tensor:
+    """Reference ``pack_float_into_int64``: bf16-precision bits plus marker."""
+
+    bits = (scale_int64 & 0xFFFFFFFF) & 0xFFFFE000
+    return (bits | (1 << 46)).view(torch.uint64)
+
+
 def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
     """Convert one processed NPU scale tensor to the A3 MegaMoE layout."""
 
     scale = scale.contiguous()
+    marker = envs.SGLANG_MEGAMOE_SCALE_MARKER.get()
     if scale.dtype in (torch.float16, torch.bfloat16, torch.float32):
         scale_fp32 = scale.to(torch.float32).reshape(-1)
+        if marker:
+            return _marker_pack_scale(scale_fp32.view(torch.int32).to(torch.int64))
         if scale_fp32.numel() % 2:
             raise ValueError(
                 "MegaMoE FP scales must contain an even number of values for "
@@ -150,7 +163,10 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
             scale_fp32.view(torch.int32).reshape(-1, 2).view(torch.uint64).reshape(-1)
         )
     if scale.dtype in (torch.int64, torch.uint64):
-        return scale.view(torch.uint64).reshape(-1)
+        scale_int64 = scale.view(torch.int64).reshape(-1)
+        if marker:
+            return _marker_pack_scale(scale_int64)
+        return scale_int64.view(torch.uint64)
     return scale.reshape(-1)
 
 
@@ -315,6 +331,60 @@ def _describe_tensors(values) -> str:
     return f"{prefix}{tuple(shape) if shape is not None else '?'}/{dtype}"
 
 
+def _tensor_stats(name: str, value) -> str:
+    """Scalar summary used to spot NaN/Inf or wrong scale magnitudes."""
+
+    if value is None:
+        return f"{name}=None"
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return f"{name}=empty"
+        value = value[0]
+    float_value = value.float()
+    return (
+        f"{name}[min={float_value.min().item():.4g}"
+        f" max={float_value.max().item():.4g}"
+        f" absmean={float_value.abs().mean().item():.4g}"
+        f" nan={int(torch.isnan(float_value).sum().item())}"
+        f" inf={int(torch.isinf(float_value).sum().item())}]"
+    )
+
+
+def _log_mega_moe_stats(
+    *,
+    hidden_states,
+    output,
+    w13_weights,
+    w2_weights,
+    scale_values,
+    scale_values2,
+    bias_values,
+    bias_values2,
+    raw_scale,
+    raw_scale2,
+) -> None:
+    """Log one numeric snapshot per process (diagnostic only)."""
+
+    rank = (
+        torch.distributed.get_rank() if torch.distributed.is_initialized() else None
+    )
+    if rank in _STATS_SEEN:
+        return
+    _STATS_SEEN.add(rank)
+    parts = [
+        _tensor_stats("x", hidden_states),
+        _tensor_stats("out", output),
+        f"raw_scale={_describe_tensors(raw_scale)}",
+        f"raw_scale2={_describe_tensors(raw_scale2)}",
+        _tensor_stats("w13", w13_weights),
+        _tensor_stats("scale", scale_values),
+        _tensor_stats("scale2", scale_values2),
+        _tensor_stats("bias", bias_values),
+        _tensor_stats("bias2", bias_values2),
+    ]
+    logger.info("[megamoe-stats] rank=%s %s", rank, " ".join(parts))
+
+
 def _log_mega_moe_call(
     *,
     dtype_mode,
@@ -325,6 +395,7 @@ def _log_mega_moe_call(
     w13_weights,
     w2_weights,
     scale_values,
+    scale_values2,
     bias_values,
     activation,
     activation_clamp,
@@ -349,6 +420,7 @@ def _log_mega_moe_call(
         f"/{w13_weights[0].dtype}",
         "w2": f"{tuple(w2_weights[0].shape)}/{w2_weights[0].dtype}",
         "scales": _describe_tensors(scale_values),
+        "scales2": _describe_tensors(scale_values2),
         "bias": _describe_tensors(bias_values),
         "act": activation,
         "clamp": activation_clamp,
@@ -481,6 +553,7 @@ def run_mega_moe(
             w13_weights=w13_weights,
             w2_weights=w2_weights,
             scale_values=mega_moe_kwargs.get("l1_weights_sf"),
+            scale_values2=mega_moe_kwargs.get("l2_weights_sf"),
             bias_values=mega_moe_kwargs.get("l1_bias"),
             activation=activation,
             activation_clamp=activation_clamp,
@@ -499,4 +572,17 @@ def run_mega_moe(
         sym_buffer,
         **mega_moe_kwargs,
     )
+    if envs.SGLANG_MEGAMOE_DEBUG.get():
+        _log_mega_moe_stats(
+            hidden_states=hidden_states,
+            output=output,
+            w13_weights=w13_weights,
+            w2_weights=w2_weights,
+            scale_values=mega_moe_kwargs.get("l1_weights_sf"),
+            scale_values2=mega_moe_kwargs.get("l2_weights_sf"),
+            bias_values=mega_moe_kwargs.get("l1_bias"),
+            bias_values2=mega_moe_kwargs.get("l2_bias"),
+            raw_scale=getattr(layer, "w13_weight_scale", None),
+            raw_scale2=getattr(layer, "w2_weight_scale", None),
+        )
     return output

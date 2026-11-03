@@ -1455,6 +1455,10 @@ class Envs:
     SGLANG_MEGAMOE_DEBUG = EnvBool(False)
     SGLANG_MEGAMOE_PAD_TO_CAPACITY = EnvBool(False)
     SGLANG_MEGAMOE_MAX_TOKENS_PER_RANK = EnvInt(4096)
+    # Rewrite packed weight scales into the reference layout used by the
+    # sgl-kernel-npu accuracy test: bf16-precision fp32 bits in the low half
+    # plus the 1 << 46 marker. Diagnostic switch for scale-format mismatches.
+    SGLANG_MEGAMOE_SCALE_MARKER = EnvBool(False)
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

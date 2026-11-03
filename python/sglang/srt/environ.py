@@ -1462,6 +1462,10 @@ class Envs:
     # Routes every row to one local expert once per process to check whether
     # the expert GEMM itself produces a non-trivial output.
     SGLANG_MEGAMOE_PROBE = EnvBool(False)
+    # Bias convention probes: the modelslim compensation term is much larger
+    # than the expert output, so a wrong sign or definition dominates it.
+    SGLANG_MEGAMOE_NO_BIAS = EnvBool(False)
+    SGLANG_MEGAMOE_NEGATE_BIAS = EnvBool(False)
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

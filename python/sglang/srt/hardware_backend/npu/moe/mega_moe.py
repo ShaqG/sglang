@@ -504,6 +504,15 @@ def run_mega_moe(
     if activation_params is not None:
         mega_moe_kwargs["activation_params"] = activation_params
 
+    if envs.SGLANG_MEGAMOE_NEGATE_BIAS.get():
+        for name in ("l1_bias", "l2_bias"):
+            values = mega_moe_kwargs.get(name)
+            if values is not None:
+                mega_moe_kwargs[name] = [-item for item in values]
+    if envs.SGLANG_MEGAMOE_NO_BIAS.get():
+        mega_moe_kwargs["l1_bias"] = None
+        mega_moe_kwargs["l2_bias"] = None
+
     num_tokens = hidden_states.shape[0]
     pad_capacity = _padded_capacity(num_tokens)
     sym_buffer = get_mega_moe_sym_buffer(

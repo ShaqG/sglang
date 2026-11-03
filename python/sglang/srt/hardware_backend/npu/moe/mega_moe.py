@@ -419,8 +419,14 @@ def _swap_w13_layout(weights, scales, bias):
         swapped_weights.append(
             npu_format_cast(nd, NPUACLFormat.ACL_FORMAT_FRACTAL_NZ)
         )
+    # cat has no uint64 kernel, so swap through the int64 view.
     swapped_scales = (
-        None if scales is None else [_swap_last_halves(item) for item in scales]
+        None
+        if scales is None
+        else [
+            _swap_last_halves(item.view(torch.int64)).view(torch.uint64)
+            for item in scales
+        ]
     )
     swapped_bias = None if bias is None else [_swap_last_halves(item) for item in bias]
     return swapped_weights, swapped_scales, swapped_bias
@@ -678,9 +684,12 @@ def run_mega_moe(
         )
         if rank not in _VARIANTS_SEEN:
             _VARIANTS_SEEN.add(rank)
-            for name, (variant_w13, override) in _mega_moe_variants(
-                mega_moe_kwargs, w13_weights
-            ).items():
+            try:
+                variants = _mega_moe_variants(mega_moe_kwargs, w13_weights)
+            except Exception as exc:
+                logger.warning("[megamoe-variant] build failed: %s", exc)
+                variants = {}
+            for name, (variant_w13, override) in variants.items():
                 try:
                     variant_out, _ = mega_moe(
                         hidden_states,

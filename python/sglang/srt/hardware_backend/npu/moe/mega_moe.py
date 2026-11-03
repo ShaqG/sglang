@@ -190,6 +190,29 @@ def mega_moe_scale_list(layer, name: str, expected_len: int):
     ]
 
 
+def mega_moe_weight_type(layer):
+    """FP4 weight dtype the MXFP4-weight providers require.
+
+    The packed-FP4 quantizer stores each weight as two 4-bit values per byte;
+    the operator cannot infer that from the tensor shape, so it needs an
+    explicit weight type. Other quantizers pass int4 in int32 and must leave
+    the parameter unset.
+    """
+
+    from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
+        NPUW4A8MXFP4MoEMethod,
+    )
+
+    if not isinstance(getattr(layer, "w2_kernel", None), NPUW4A8MXFP4MoEMethod):
+        return None
+    import torch_npu
+
+    dtype = getattr(torch_npu, "float4_e2m1fn_x2", None)
+    if dtype is None:
+        raise RuntimeError("MXFP4 MegaMoE requires torch_npu.float4_e2m1fn_x2")
+    return dtype
+
+
 def check_mega_moe_kernel(layer) -> None:
     """Reject quantization methods that the operator interface cannot serve."""
 
@@ -610,6 +633,11 @@ def run_mega_moe(
     # activation actually needs it.
     if activation_params is not None:
         mega_moe_kwargs["activation_params"] = activation_params
+
+    weight_type = mega_moe_weight_type(layer)
+    if weight_type is not None:
+        mega_moe_kwargs["weight1_type"] = weight_type
+        mega_moe_kwargs["weight2_type"] = weight_type
 
     w13_weights = _apply_mega_moe_variant(
         envs.SGLANG_MEGAMOE_VARIANT.get(), id(layer), w13_weights, mega_moe_kwargs

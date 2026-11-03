@@ -1466,6 +1466,9 @@ class Envs:
     # than the expert output, so a wrong sign or definition dominates it.
     SGLANG_MEGAMOE_NO_BIAS = EnvBool(False)
     SGLANG_MEGAMOE_NEGATE_BIAS = EnvBool(False)
+    # Sweeps the bias/scale interpretations in one run instead of one restart
+    # per hypothesis.
+    SGLANG_MEGAMOE_VARIANTS = EnvBool(False)
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

@@ -25,6 +25,9 @@ _STATS_SEEN: set = set()
 # Ranks that already ran the local-expert probe.
 _PROBE_SEEN: set = set()
 
+# Ranks that already ran the tensor-variant sweep.
+_VARIANTS_SEEN: set = set()
+
 
 _MEGA_MOE_SUPPORTED_KERNELS_MSG = (
     "ascend_ops fused_op supports NPUUnquantMoEMethod, "
@@ -391,6 +394,40 @@ def _log_mega_moe_stats(
     logger.info("[megamoe-stats] rank=%s %s", rank, " ".join(parts))
 
 
+def _repack_marker_scales(values):
+    if values is None:
+        return None
+    return [
+        _marker_pack_scale(item.view(torch.int64).reshape(-1)) for item in values
+    ]
+
+
+def _mega_moe_variants(base_kwargs: dict) -> dict:
+    """Competing interpretations of the same operator inputs."""
+
+    def negated(kwargs):
+        out = dict(kwargs)
+        for name in ("l1_bias", "l2_bias"):
+            if out.get(name) is not None:
+                out[name] = [-item for item in out[name]]
+        return out
+
+    marker = dict(base_kwargs)
+    marker["l1_weights_sf"] = _repack_marker_scales(marker.get("l1_weights_sf"))
+    marker["l2_weights_sf"] = _repack_marker_scales(marker.get("l2_weights_sf"))
+
+    no_bias = dict(base_kwargs)
+    no_bias["l1_bias"] = None
+    no_bias["l2_bias"] = None
+
+    return {
+        "bias_neg": negated(base_kwargs),
+        "bias_none": no_bias,
+        "scale_marker": marker,
+        "scale_marker_bias_neg": negated(marker),
+    }
+
+
 def _log_mega_moe_call(
     *,
     dtype_mode,
@@ -596,6 +633,33 @@ def run_mega_moe(
             raw_scale=getattr(layer, "w13_weight_scale", None),
             raw_scale2=getattr(layer, "w2_weight_scale", None),
         )
+
+    if envs.SGLANG_MEGAMOE_VARIANTS.get():
+        # Sweep the competing interpretations of the operator inputs in one
+        # run, so a single restart compares them against the alltoallv output.
+        rank = (
+            torch.distributed.get_rank()
+            if torch.distributed.is_initialized()
+            else None
+        )
+        if rank not in _VARIANTS_SEEN:
+            _VARIANTS_SEEN.add(rank)
+            for name, override in _mega_moe_variants(mega_moe_kwargs).items():
+                variant_out, _ = mega_moe(
+                    hidden_states,
+                    topk_ids,
+                    topk_weights,
+                    w13_weights,
+                    w2_weights,
+                    sym_buffer,
+                    **override,
+                )
+                logger.info(
+                    "[megamoe-variant] rank=%s variant=%s %s",
+                    rank,
+                    name,
+                    _tensor_stats("out", variant_out),
+                )
 
     if envs.SGLANG_MEGAMOE_PROBE.get():
         # Route every row to one local expert with weights summing to one: the

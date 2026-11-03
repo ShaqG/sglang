@@ -320,8 +320,8 @@ class AscendOpsDispatcher(BaseDispatcher):
         from sglang.srt.hardware_backend.npu.moe.mega_moe import _tensor_stats
 
         rank = dist.get_rank() if dist.is_initialized() else None
-        key = (mode, rank)
-        if key in _COMBINE_DEBUG_SEEN:
+        key = (mode, rank, int(output.shape[0]))
+        if key in _COMBINE_DEBUG_SEEN or len(_COMBINE_DEBUG_SEEN) >= 256:
             return
         _COMBINE_DEBUG_SEEN.add(key)
         logger.info("[ascend-ops-combine] mode=%s rank=%s %s", mode, rank,

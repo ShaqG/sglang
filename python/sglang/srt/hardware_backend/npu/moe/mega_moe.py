@@ -374,9 +374,10 @@ def _log_mega_moe_stats(
     rank = (
         torch.distributed.get_rank() if torch.distributed.is_initialized() else None
     )
-    if rank in _STATS_SEEN:
+    key = (rank, int(hidden_states.shape[0]))
+    if key in _STATS_SEEN or len(_STATS_SEEN) >= 256:
         return
-    _STATS_SEEN.add(rank)
+    _STATS_SEEN.add(key)
     parts = [
         _tensor_stats("x", hidden_states),
         _tensor_stats("out", output),

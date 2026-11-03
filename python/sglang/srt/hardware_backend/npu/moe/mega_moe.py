@@ -403,28 +403,29 @@ def _repack_marker_scales(values):
 
 
 def _mega_moe_variants(base_kwargs: dict) -> dict:
-    """Competing interpretations of the same operator inputs."""
+    """Competing interpretations of the same operator inputs.
 
-    def negated(kwargs):
+    ``bias=None`` is intentionally absent: the A3 tiling rejects it for W4A8,
+    and the failure takes the whole scheduler down.
+    """
+
+    def scaled(kwargs, factor):
         out = dict(kwargs)
         for name in ("l1_bias", "l2_bias"):
             if out.get(name) is not None:
-                out[name] = [-item for item in out[name]]
+                out[name] = [item * factor for item in out[name]]
         return out
 
     marker = dict(base_kwargs)
     marker["l1_weights_sf"] = _repack_marker_scales(marker.get("l1_weights_sf"))
     marker["l2_weights_sf"] = _repack_marker_scales(marker.get("l2_weights_sf"))
 
-    no_bias = dict(base_kwargs)
-    no_bias["l1_bias"] = None
-    no_bias["l2_bias"] = None
-
     return {
-        "bias_neg": negated(base_kwargs),
-        "bias_none": no_bias,
         "scale_marker": marker,
-        "scale_marker_bias_neg": negated(marker),
+        "bias_div8": scaled(base_kwargs, 1.0 / 8.0),
+        "bias_mul8": scaled(base_kwargs, 8.0),
+        "bias_neg": scaled(base_kwargs, -1.0),
+        "scale_marker_bias_div8": scaled(marker, 1.0 / 8.0),
     }
 
 
@@ -645,15 +646,24 @@ def run_mega_moe(
         if rank not in _VARIANTS_SEEN:
             _VARIANTS_SEEN.add(rank)
             for name, override in _mega_moe_variants(mega_moe_kwargs).items():
-                variant_out, _ = mega_moe(
-                    hidden_states,
-                    topk_ids,
-                    topk_weights,
-                    w13_weights,
-                    w2_weights,
-                    sym_buffer,
-                    **override,
-                )
+                try:
+                    variant_out, _ = mega_moe(
+                        hidden_states,
+                        topk_ids,
+                        topk_weights,
+                        w13_weights,
+                        w2_weights,
+                        sym_buffer,
+                        **override,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[megamoe-variant] rank=%s variant=%s failed: %s",
+                        rank,
+                        name,
+                        exc,
+                    )
+                    break
                 logger.info(
                     "[megamoe-variant] rank=%s variant=%s %s",
                     rank,

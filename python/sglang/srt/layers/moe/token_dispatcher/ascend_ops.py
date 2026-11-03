@@ -225,6 +225,9 @@ class AscendOpsDispatcher(BaseDispatcher):
         self, hidden_states: torch.Tensor, topk_output: TopKOutput
     ) -> DispatchOutput:
         topk_weights, topk_ids, _ = topk_output
+        self._debug_log_combine("dispatch", hidden_states)
+        self._debug_log_combine("topk_weights", topk_weights)
+        self._debug_log_combine("topk_ids", topk_ids.to(torch.int32))
         if get_is_extend_in_batch():
             if self.moe_ascend_ops_config.prefill == "fused_op":
                 return self._dispatch_fused_op(

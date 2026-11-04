@@ -153,8 +153,12 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
 
     scale = scale.contiguous()
     marker = envs.SGLANG_MEGAMOE_SCALE_MARKER.get()
-    if scale.dtype in (torch.float16, torch.bfloat16, torch.float32):
-        scale_fp32 = scale.to(torch.float32).reshape(-1)
+    if scale.dtype in (torch.float16, torch.bfloat16):
+        # The W8A8 quantizer keeps per-channel scales in half precision and
+        # the operator consumes them as-is.
+        return scale.reshape(-1)
+    if scale.dtype == torch.float32:
+        scale_fp32 = scale.reshape(-1)
         if marker:
             return _marker_pack_scale(scale_fp32.view(torch.int32).to(torch.int64))
         if scale_fp32.numel() % 2:
@@ -171,6 +175,15 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
             return _marker_pack_scale(scale_int64)
         return scale_int64.view(torch.uint64)
     return scale.reshape(-1)
+
+
+def mega_moe_has_weight_scale(layer) -> bool:
+    """Whether the quantizer exposes per-expert weight scales at all."""
+
+    return (
+        getattr(layer, "w13_weight_scale", None) is not None
+        or getattr(layer, "w13_weight_scale_inv", None) is not None
+    )
 
 
 def mega_moe_uses_mxfp_scales(layer) -> bool:
@@ -645,9 +658,9 @@ def run_mega_moe(
     mxfp_scales = mega_moe_uses_mxfp_scales(layer)
     l1_bias = mega_moe_bias_list(layer, "w13", len(w13_weights))
     l2_bias = mega_moe_bias_list(layer, "w2", len(w2_weights))
-    if mxfp_scales:
-        # Packed-FP4 weights have no zero point, but the A5 prototype still
-        # lists bias as a required input, so pass zeros.
+    if l1_bias is None and (mxfp_scales or mega_moe_has_weight_scale(layer)):
+        # The A5 prototype lists bias as a required input even when the
+        # quantizer has no compensation term, so pass zeros.
         l1_bias = l1_bias or [
             torch.zeros(weight.shape[-1], dtype=torch.float32, device=weight.device)
             for weight in w13_weights

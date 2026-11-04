@@ -186,15 +186,6 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
     return scale.reshape(-1)
 
 
-def mega_moe_has_weight_scale(layer) -> bool:
-    """Whether the quantizer exposes per-expert weight scales at all."""
-
-    return (
-        getattr(layer, "w13_weight_scale", None) is not None
-        or getattr(layer, "w13_weight_scale_inv", None) is not None
-    )
-
-
 def mega_moe_uses_mxfp_scales(layer) -> bool:
     """Whether the layer keeps E8M0 block scales instead of packed INT64."""
 
@@ -705,9 +696,10 @@ def run_mega_moe(
     mxfp_scales = mega_moe_uses_mxfp_scales(layer)
     l1_bias = mega_moe_bias_list(layer, "w13", num_local_experts)
     l2_bias = mega_moe_bias_list(layer, "w2", num_local_experts)
-    if l1_bias is None and (mxfp_scales or mega_moe_has_weight_scale(layer)):
-        # The A5 prototype lists bias as a required input even when the
-        # quantizer has no compensation term, so pass zeros.
+    if l1_bias is None and mxfp_scales:
+        # The A5 prototype lists bias as a required input even though MXFP
+        # modes carry no compensation term, so pass zeros. A3 takes ``None``
+        # for A8W8-INT and A16W16, matching the reference operator tests.
         if w13_source is not None and w2_source is not None:
             l1_bias = l1_bias or [
                 torch.zeros(

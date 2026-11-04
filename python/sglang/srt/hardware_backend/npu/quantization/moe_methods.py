@@ -5,7 +5,7 @@ import torch
 from torch.nn.parameter import Parameter
 
 from sglang.srt.environ import envs
-from sglang.srt.hardware_backend.npu.utils import npu_format_cast
+from sglang.srt.hardware_backend.npu.utils import is_npu_arch35, npu_format_cast
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
 
 if TYPE_CHECKING:
@@ -83,13 +83,15 @@ def reshape_w4a8_mxfp_weight_scale_for_npu(scale: torch.Tensor) -> torch.Tensor:
 def _mega_moe_nd_copy_enabled(layer) -> bool:
     """Whether an ND weight copy is needed for the fused MegaMoE prefill.
 
-    The operator rejects FRACTAL_NZ weights and aclnn cannot re-lay-out an
-    existing NZ tensor, so the copy has to be captured here. Enabled whenever
-    the layer's dispatcher routes prefill through the fused operator.
+    Only A5 (arch35) rejects FRACTAL_NZ and cannot re-lay-out an existing NZ
+    tensor, so the copy has to be captured here. A3 keeps its native
+    per-expert NZ weights, which is what its operator contract expects.
     """
 
     if envs.SGLANG_MEGAMOE_ND_WEIGHTS.is_set():
         return envs.SGLANG_MEGAMOE_ND_WEIGHTS.get()
+    if not is_npu_arch35():
+        return False
     dispatcher = getattr(layer, "dispatcher", None)
     config = getattr(dispatcher, "moe_ascend_ops_config", None)
     return getattr(config, "prefill", None) == "fused_op"

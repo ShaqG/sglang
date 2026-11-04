@@ -324,6 +324,14 @@ class NPUW4A8MXFP4MoEMethod(_NPUMoEMethodBase):
 
         weight = getattr(layer, f"{weight_prefix}_weight")
         weight_scale = getattr(layer, f"{weight_prefix}_weight_scale")
+        if envs.SGLANG_MEGAMOE_ND_WEIGHTS.get():
+            # The fused MegaMoE operator only accepts ND weights; capture the
+            # layout before the shared helper packs and re-formats them.
+            setattr(
+                layer,
+                f"{weight_prefix}_weight_mega_moe",
+                weight.data.transpose(-1, -2).contiguous(),
+            )
         weight.data, weight_scale.data = prepare_w4a8_mxfp_weight(
             weight.data, weight_scale.data
         )

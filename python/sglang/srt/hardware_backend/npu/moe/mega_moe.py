@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import inspect
-import logging
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -12,21 +11,7 @@ import torch
 from sglang.srt.environ import envs
 
 
-logger = logging.getLogger(__name__)
-
 _SYMM_BUFFER_CACHE: dict[tuple, tuple[int, object]] = {}
-
-# Signatures already logged by ``SGLANG_MEGAMOE_DEBUG``. The operator contract
-# only changes when one of the logged fields changes, so one line per shape is
-# enough to keep the log readable.
-_DEBUG_SEEN: set[tuple] = set()
-
-# Ranks that already emitted the numeric snapshot.
-_STATS_SEEN: set = set()
-
-# Ranks that already ran the local-expert probe.
-_PROBE_SEEN: set = set()
-
 
 _MEGA_MOE_SUPPORTED_KERNELS_MSG = (
     "ascend_ops fused_op supports NPUUnquantMoEMethod, "
@@ -143,13 +128,6 @@ def mega_moe_bias_list(layer, prefix: str, expected_len: int):
     return None
 
 
-def _marker_pack_scale(scale_int64: torch.Tensor) -> torch.Tensor:
-    """Reference ``pack_float_into_int64``: bf16-precision bits plus marker."""
-
-    bits = (scale_int64 & 0xFFFFFFFF) & 0xFFFFE000
-    return (bits | (1 << 46)).view(torch.uint64)
-
-
 def _fp32_bits_to_uint64(scale: torch.Tensor) -> torch.Tensor:
     """Reference ``pack_scale_to_uint64``: fp32 bits widened into UINT64."""
 
@@ -162,7 +140,6 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
     """Convert one processed NPU scale tensor to the A3 MegaMoE layout."""
 
     scale = scale.contiguous()
-    marker = envs.SGLANG_MEGAMOE_SCALE_MARKER.get()
     if scale.dtype in (torch.float16, torch.bfloat16):
         # The INT8 dispatch contract takes UINT64 scales whose low 32 bits hold
         # the fp32 value, so the per-channel half-precision scale the W8A8
@@ -170,8 +147,6 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
         return _fp32_bits_to_uint64(scale.float())
     if scale.dtype == torch.float32:
         scale_fp32 = scale.reshape(-1)
-        if marker:
-            return _marker_pack_scale(scale_fp32.view(torch.int32).to(torch.int64))
         if scale_fp32.numel() % 2:
             raise ValueError(
                 "MegaMoE FP scales must contain an even number of values for "
@@ -181,10 +156,7 @@ def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
             scale_fp32.view(torch.int32).reshape(-1, 2).view(torch.uint64).reshape(-1)
         )
     if scale.dtype in (torch.int64, torch.uint64):
-        scale_int64 = scale.view(torch.int64).reshape(-1)
-        if marker:
-            return _marker_pack_scale(scale_int64)
-        return scale_int64.view(torch.uint64)
+        return scale.view(torch.int64).reshape(-1).view(torch.uint64)
     return scale.reshape(-1)
 
 
@@ -300,21 +272,6 @@ def _symm_buffer_key(runner_config, quant_config, group, dtype_mode) -> tuple:
     )
 
 
-def get_mega_moe_capacity(
-    runner_config,
-    quant_config,
-    group,
-    num_tokens: int,
-    dtype_mode: Optional[str] = None,
-) -> int:
-    """Capacity the SymmBuffer uses for a batch of ``num_tokens`` rows."""
-
-    state = _SYMM_BUFFER_CACHE.get(
-        _symm_buffer_key(runner_config, quant_config, group, dtype_mode)
-    )
-    return max(num_tokens, state[0] if state is not None else 1)
-
-
 def _padded_capacity(num_tokens: int) -> Optional[int]:
     """Fixed capacity the batch is padded to, or None when padding is off.
 
@@ -416,256 +373,6 @@ def get_mega_moe_sym_buffer(
     )
     _SYMM_BUFFER_CACHE[key] = (max_tokens, buffer)
     return buffer
-
-
-def _describe_tensors(values) -> str:
-    """Shape/dtype summary of a tensor or a per-expert tensor list."""
-
-    if values is None:
-        return "None"
-    if isinstance(values, (list, tuple)):
-        if not values:
-            return "empty"
-        first = values[0]
-    else:
-        first = values
-    shape = getattr(first, "shape", None)
-    dtype = getattr(first, "dtype", None)
-    prefix = f"{len(values)}x" if isinstance(values, (list, tuple)) else ""
-    return f"{prefix}{tuple(shape) if shape is not None else '?'}/{dtype}"
-
-
-def _tensor_stats(name: str, value) -> str:
-    """Scalar summary used to spot NaN/Inf or wrong magnitudes.
-
-    Only ND tensors are accepted: FRACTAL_NZ weights would need a TransData op,
-    which is not safe to insert from this stream context.
-    """
-
-    if value is None:
-        return f"{name}=None"
-    if isinstance(value, (list, tuple)):
-        if not value:
-            return f"{name}=empty"
-        value = value[0]
-    try:
-        float_value = value.float()
-        head = [round(item, 6) for item in float_value.flatten()[:4].tolist()]
-        return (
-            f"{name}[min={float_value.min().item():.4g}"
-            f" max={float_value.max().item():.4g}"
-            f" absmean={float_value.abs().mean().item():.4g}"
-            f" nan={int(torch.isnan(float_value).sum().item())}"
-            f" inf={int(torch.isinf(float_value).sum().item())}"
-            f" head={head}]"
-        )
-    except Exception as exc:  # diagnostics must never break serving
-        return f"{name}=<stats failed: {type(exc).__name__}>"
-
-
-def _log_mega_moe_stats(
-    *,
-    hidden_states,
-    output,
-    bias_values,
-    bias_values2,
-    raw_scale,
-    raw_scale2,
-) -> None:
-    """Log one numeric snapshot per process (diagnostic only)."""
-
-    rank = (
-        torch.distributed.get_rank() if torch.distributed.is_initialized() else None
-    )
-    key = (rank, int(hidden_states.shape[0]))
-    if key in _STATS_SEEN or len(_STATS_SEEN) >= 256:
-        return
-    _STATS_SEEN.add(key)
-    parts = [
-        _tensor_stats("x", hidden_states),
-        _tensor_stats("out", output),
-        f"raw_scale={_describe_tensors(raw_scale)}",
-        f"raw_scale2={_describe_tensors(raw_scale2)}",
-        _tensor_stats("bias", bias_values),
-        _tensor_stats("bias2", bias_values2),
-    ]
-    logger.info("[megamoe-stats] rank=%s %s", rank, " ".join(parts))
-
-
-def _repack_marker_scales(values):
-    if values is None:
-        return None
-    return [
-        _marker_pack_scale(item.view(torch.int64).reshape(-1)) for item in values
-    ]
-
-
-def _swap_last_halves(t: torch.Tensor) -> torch.Tensor:
-    half = t.shape[-1] // 2
-    return torch.cat((t[..., half:], t[..., :half]), dim=-1).contiguous()
-
-
-def _swap_w13_layout(weights, scales, bias):
-    """Move the gate/up halves of w13 to the other side of the split."""
-
-    from sglang.srt.hardware_backend.npu.utils import NPUACLFormat, npu_format_cast
-
-    swapped_weights = []
-    for weight in weights:
-        nd = npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND)
-        nd = _swap_last_halves(nd)
-        swapped_weights.append(
-            npu_format_cast(nd, NPUACLFormat.ACL_FORMAT_FRACTAL_NZ)
-        )
-    # cat has no uint64 kernel, so swap through the int64 view.
-    swapped_scales = (
-        None
-        if scales is None
-        else [
-            _swap_last_halves(item.view(torch.int64)).view(torch.uint64)
-            for item in scales
-        ]
-    )
-    swapped_bias = None if bias is None else [_swap_last_halves(item) for item in bias]
-    return swapped_weights, swapped_scales, swapped_bias
-
-
-# Layer id -> swapped w13 tensors. Rebuilt once because the format casts are
-# expensive and must not run inside the serving loop.
-_SWAPPED_W13_CACHE: dict[int, tuple] = {}
-
-
-def _apply_mega_moe_variant(name: str, layer_key, w13_weights, mega_moe_kwargs):
-    """Rewrite the operator inputs for one alternative interpretation.
-
-    Returns the w13 list to pass; keyword tensors are updated in place. Only
-    one variant is applied per run: a mismatched call desynchronises the
-    collectives and hangs the scheduler.
-    """
-
-    if not name:
-        return w13_weights
-
-    if name in ("bias_mul8", "bias_div8", "bias_neg"):
-        factor = {"bias_mul8": 8.0, "bias_div8": 1.0 / 8.0, "bias_neg": -1.0}[name]
-        for field in ("l1_bias", "l2_bias"):
-            values = mega_moe_kwargs.get(field)
-            if values is not None:
-                mega_moe_kwargs[field] = [item * factor for item in values]
-        return w13_weights
-
-    if name == "scale_marker":
-        for field in ("l1_weights_sf", "l2_weights_sf"):
-            mega_moe_kwargs[field] = _repack_marker_scales(
-                mega_moe_kwargs.get(field)
-            )
-        return w13_weights
-
-    if name == "swap_w13_halves":
-        cached = _SWAPPED_W13_CACHE.get(layer_key)
-        if cached is None:
-            cached = _swap_w13_layout(
-                w13_weights,
-                mega_moe_kwargs.get("l1_weights_sf"),
-                mega_moe_kwargs.get("l1_bias"),
-            )
-            _SWAPPED_W13_CACHE[layer_key] = cached
-        mega_moe_kwargs["l1_weights_sf"] = cached[1]
-        mega_moe_kwargs["l1_bias"] = cached[2]
-        logger.info("[megamoe-variant] applied %s", name)
-        return cached[0]
-
-    if name == "nibble_swap":
-        # Element-wise bit swap of the two int4 halves inside every byte, i.e.
-        # the opposite nibble order when unpacking the packed weights.
-        swapped = []
-        for weight in w13_weights:
-            int32 = weight.view(torch.int32)
-            low = (int32 & 0x0F0F0F0F) << 4
-            high = (int32 >> 4) & 0x0F0F0F0F
-            swapped.append((low | high).view(weight.dtype))
-        logger.info("[megamoe-variant] applied %s", name)
-        return swapped
-
-    if name == "reverse_experts":
-        for field in ("l1_weights_sf", "l2_weights_sf", "l1_bias", "l2_bias"):
-            values = mega_moe_kwargs.get(field)
-            if values is not None:
-                mega_moe_kwargs[field] = list(reversed(values))
-        logger.info("[megamoe-variant] applied %s", name)
-        return list(reversed(w13_weights))
-
-    raise ValueError(f"unknown MegaMoE variant {name!r}")
-
-
-def _log_mega_moe_call(
-    *,
-    dtype_mode,
-    quant_config,
-    hidden_states,
-    topk_ids,
-    topk_weights,
-    w13_weights,
-    w2_weights,
-    num_local_experts,
-    scale_values,
-    scale_values2,
-    bias_values,
-    activation,
-    activation_clamp,
-    activation_params,
-    capacity,
-    num_tokens,
-    mask,
-    layer=None,
-) -> None:
-    """Log the operator contract once per distinct shape (diagnostic only)."""
-
-    quant_mode, quant_dtype = mega_moe_quant_args(quant_config, dtype_mode)
-    fields = {
-        "mode": dtype_mode,
-        "quant": f"({quant_mode}, {quant_dtype})",
-        "tokens": num_tokens,
-        "rows": int(hidden_states.shape[0]),
-        "capacity": capacity,
-        "mask": _describe_tensors(mask),
-        "x": f"{tuple(hidden_states.shape)}/{hidden_states.dtype}",
-        "topk": f"{tuple(topk_ids.shape)}/{topk_ids.dtype}/{topk_weights.dtype}",
-        "experts": f"{num_local_experts}x{tuple(w13_weights[0].shape)}"
-        f"/{w13_weights[0].dtype}",
-        "w2": f"{tuple(w2_weights[0].shape)}/{w2_weights[0].dtype}",
-        "scales": _describe_tensors(scale_values),
-        "scales2": _describe_tensors(scale_values2),
-        "bias": _describe_tensors(bias_values),
-        "act": activation,
-        "clamp": activation_clamp,
-        "act_params": activation_params,
-        "variant": envs.SGLANG_MEGAMOE_VARIANT.get() or "none",
-        "impl": mega_moe_impl(),
-        "kernel": type(getattr(layer, "w2_kernel", None)).__name__,
-        "nd_copy": (
-            "yes"
-            if getattr(layer, "w13_weight_mega_moe", None) is not None
-            else "no"
-        ),
-        "scale_attrs": (
-            ",".join(sorted(name for name in dir(layer) if "scale" in name))
-            if layer is not None
-            else "?"
-        ),
-    }
-    key = tuple(sorted((name, repr(value)) for name, value in fields.items()))
-    if key in _DEBUG_SEEN or len(_DEBUG_SEEN) >= 32:
-        return
-    _DEBUG_SEEN.add(key)
-    rank = (
-        torch.distributed.get_rank() if torch.distributed.is_initialized() else None
-    )
-    logger.info(
-        "[megamoe] rank=%s %s",
-        rank,
-        " ".join(f"{name}={value}" for name, value in fields.items()),
-    )
 
 
 def run_mega_moe(
@@ -777,17 +484,6 @@ def run_mega_moe(
         mega_moe_kwargs["weight1_type"] = weight_type
         mega_moe_kwargs["weight2_type"] = weight_type
 
-    input_dtype = None
-    if envs.SGLANG_MEGAMOE_FP16_ACT.get():
-        # The FP4 weight path reports a float16 output prototype, so feed it
-        # float16 activations and restore the model dtype afterwards.
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float16)
-
-    w13_weights = _apply_mega_moe_variant(
-        envs.SGLANG_MEGAMOE_VARIANT.get(), id(layer), w13_weights, mega_moe_kwargs
-    )
-
     num_tokens = hidden_states.shape[0]
     pad_capacity = _padded_capacity(num_tokens)
     sym_buffer = get_mega_moe_sym_buffer(
@@ -796,12 +492,6 @@ def run_mega_moe(
 
     quant_mode, _ = mega_moe_quant_args(quant_config, dtype_mode)
     is_mxfp = quant_mode == 4
-
-    capacity = pad_capacity
-    if capacity is None and envs.SGLANG_MEGAMOE_DEBUG.get():
-        capacity = get_mega_moe_capacity(
-            runner_config, quant_config, group, num_tokens, dtype_mode
-        )
 
     x_active_mask = None
     if pad_capacity is not None and not is_mxfp:
@@ -833,28 +523,6 @@ def run_mega_moe(
         x_active_mask[:num_tokens] = 1
         mega_moe_kwargs["x_active_mask"] = x_active_mask
 
-    if envs.SGLANG_MEGAMOE_DEBUG.get():
-        _log_mega_moe_call(
-            dtype_mode=dtype_mode,
-            quant_config=quant_config,
-            hidden_states=hidden_states,
-            topk_ids=topk_ids,
-            topk_weights=topk_weights,
-            w13_weights=w13_weights,
-            w2_weights=w2_weights,
-            num_local_experts=num_local_experts,
-            scale_values=mega_moe_kwargs.get("l1_weights_sf"),
-            scale_values2=mega_moe_kwargs.get("l2_weights_sf"),
-            bias_values=mega_moe_kwargs.get("l1_bias"),
-            activation=activation,
-            activation_clamp=activation_clamp,
-            activation_params=activation_params,
-            capacity=capacity,
-            num_tokens=num_tokens,
-            mask=x_active_mask,
-            layer=layer,
-        )
-
     output, _ = mega_moe(
         hidden_states,
         topk_ids,
@@ -865,48 +533,4 @@ def run_mega_moe(
         **mega_moe_impl_kwargs(mega_moe),
         **mega_moe_kwargs,
     )
-    if input_dtype is not None and output.dtype != input_dtype:
-        output = output.to(input_dtype)
-    if envs.SGLANG_MEGAMOE_DEBUG.get():
-        _log_mega_moe_stats(
-            hidden_states=hidden_states,
-            output=output,
-            bias_values=mega_moe_kwargs.get("l1_bias"),
-            bias_values2=mega_moe_kwargs.get("l2_bias"),
-            raw_scale=getattr(layer, "w13_weight_scale", None),
-            raw_scale2=getattr(layer, "w2_weight_scale", None),
-        )
-
-    if envs.SGLANG_MEGAMOE_PROBE.get():
-        # Route every row to one local expert with weights summing to one: the
-        # result is that expert's full output, independent of routing/combine.
-        rank = (
-            torch.distributed.get_rank()
-            if torch.distributed.is_initialized()
-            else None
-        )
-        if rank not in _PROBE_SEEN:
-            _PROBE_SEEN.add(rank)
-            ep_rank = torch.distributed.get_rank(group)
-            local_experts = num_local_experts
-            probe_ids = torch.full_like(topk_ids, ep_rank * local_experts)
-            probe_weights = torch.full_like(
-                topk_weights, 1.0 / max(1, int(topk_ids.shape[1]))
-            )
-            probe_out, _ = mega_moe(
-                hidden_states,
-                probe_ids,
-                probe_weights,
-                w13_weights,
-                w2_weights,
-                sym_buffer,
-                **mega_moe_kwargs,
-                **mega_moe_impl_kwargs(mega_moe),
-            )
-            logger.info(
-                "[megamoe-probe] rank=%s local_expert=%s %s",
-                rank,
-                ep_rank * local_experts,
-                _tensor_stats("out", probe_out),
-            )
     return output

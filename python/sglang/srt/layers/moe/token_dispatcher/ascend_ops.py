@@ -6,7 +6,6 @@ AllGather, AllToAllV, MC2, and MegaMoE dispatch boundaries.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Optional
 
@@ -39,11 +38,6 @@ from sglang.srt.layers.moe.topk import TopKOutput
 from sglang.srt.layers.moe.utils import AscendOpsConfig, DispatcherOutputDtype
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.utils import is_npu
-
-logger = logging.getLogger(__name__)
-
-# (mode, rank) pairs that already logged their combine magnitude.
-_COMBINE_DEBUG_SEEN: set = set()
 
 if is_npu():
     import torch_npu
@@ -225,9 +219,6 @@ class AscendOpsDispatcher(BaseDispatcher):
         self, hidden_states: torch.Tensor, topk_output: TopKOutput
     ) -> DispatchOutput:
         topk_weights, topk_ids, _ = topk_output
-        self._debug_log_combine("dispatch", hidden_states)
-        self._debug_log_combine("topk_weights", topk_weights)
-        self._debug_log_combine("topk_ids", topk_ids.to(torch.int32))
         if get_is_extend_in_batch():
             if self.moe_ascend_ops_config.prefill == "fused_op":
                 return self._dispatch_fused_op(
@@ -302,33 +293,14 @@ class AscendOpsDispatcher(BaseDispatcher):
         if isinstance(state, _AllGatherState):
             return self._combine_all_gather(combine_input.hidden_states, state)
         if isinstance(state, _AllToAllVState):
-            output = self._combine_all_to_all_v(
+            return self._combine_all_to_all_v(
                 combine_input.hidden_states, state
             )
-            self._debug_log_combine("alltoallv", output)
-            return output
         if isinstance(state, _MC2State):
             return self._combine_mc2(combine_input.hidden_states, state)
         if isinstance(state, _MegaMoEState):
             return self._combine_megamoe(combine_input.hidden_states, state)
         raise TypeError(f"unknown Ascend Ops forward state: {type(state)!r}")
-
-    @staticmethod
-    def _debug_log_combine(mode: str, output: torch.Tensor) -> None:
-        """One-shot magnitude snapshot used to compare prefill backends."""
-
-        if not envs.SGLANG_MEGAMOE_DEBUG.get():
-            return
-
-        from sglang.srt.hardware_backend.npu.moe.mega_moe import _tensor_stats
-
-        rank = dist.get_rank() if dist.is_initialized() else None
-        key = (mode, rank, int(output.shape[0]))
-        if key in _COMBINE_DEBUG_SEEN or len(_COMBINE_DEBUG_SEEN) >= 256:
-            return
-        _COMBINE_DEBUG_SEEN.add(key)
-        logger.info("[ascend-ops-combine] mode=%s rank=%s %s", mode, rank,
-                    _tensor_stats("out", output))
 
     # Decode (MC2 low latency)
 

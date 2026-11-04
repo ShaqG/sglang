@@ -1447,32 +1447,12 @@ class Envs:
     # read by several call sites; do not use in new code.
     SGLANG_DEEPEP_BF16_DISPATCH = EnvBool(False)
     SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
-    # Diagnostic switches for the ascend_ops MegaMoE (fused_op) path.
-    # DEBUG logs the per-rank operator contract once per shape.
+    # Capacity padding for the ascend_ops MegaMoE (fused_op) path.
     # PAD_TO_CAPACITY pads each batch to MAX_TOKENS_PER_RANK and passes an int8
     # x_active_mask, the layout the A3 MegaMoE contract asks for. The capacity
     # must match on every rank; A3 caps it at 4096.
-    SGLANG_MEGAMOE_DEBUG = EnvBool(False)
     SGLANG_MEGAMOE_PAD_TO_CAPACITY = EnvBool(False)
     SGLANG_MEGAMOE_MAX_TOKENS_PER_RANK = EnvInt(4096)
-    # Rewrite packed weight scales into the reference layout used by the
-    # sgl-kernel-npu accuracy test: bf16-precision fp32 bits in the low half
-    # plus the 1 << 46 marker. Diagnostic switch for scale-format mismatches.
-    SGLANG_MEGAMOE_SCALE_MARKER = EnvBool(False)
-    # Routes every row to one local expert once per process to check whether
-    # the expert GEMM itself produces a non-trivial output.
-    SGLANG_MEGAMOE_PROBE = EnvBool(False)
-    # Bias convention probes: the modelslim compensation term is much larger
-    # than the expert output, so a wrong sign or definition dominates it.
-    SGLANG_MEGAMOE_NO_BIAS = EnvBool(False)
-    SGLANG_MEGAMOE_NEGATE_BIAS = EnvBool(False)
-    # Applies one alternative interpretation to the operator inputs; empty
-    # keeps the configured behaviour. Values: swap_w13_halves, bias_mul8,
-    # bias_div8, scale_marker.
-    SGLANG_MEGAMOE_VARIANT = EnvStr("")
-    # Feeds float16 activations to the fused op; the FP4 weight path reports a
-    # float16 output prototype while the model runs in bfloat16.
-    SGLANG_MEGAMOE_FP16_ACT = EnvBool(False)
     # Keeps an ND copy of the expert weights at load time; the fused operator
     # rejects FRACTAL_NZ weights and cannot convert them lazily.
     SGLANG_MEGAMOE_ND_WEIGHTS = EnvBool(False)

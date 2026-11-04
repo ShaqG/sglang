@@ -644,8 +644,17 @@ def run_mega_moe(
 
     from sgl_kernel_npu.modules.moe import mega_moe
 
-    w13_weights = mega_moe_weight_list(layer.w13_weight)
-    w2_weights = mega_moe_weight_list(layer.w2_weight, len(w13_weights))
+    # The operator rejects FRACTAL_NZ weights, so prefer the ND copy kept at
+    # load time; fall back to the quantizer weights for the INT paths that are
+    # still served in place.
+    w13_source = getattr(layer, "w13_weight_mega_moe", None)
+    if w13_source is None:
+        w13_source = layer.w13_weight
+    w2_source = getattr(layer, "w2_weight_mega_moe", None)
+    if w2_source is None:
+        w2_source = layer.w2_weight
+    w13_weights = mega_moe_weight_list(w13_source)
+    w2_weights = mega_moe_weight_list(w2_source, len(w13_weights))
     if len(w2_weights) != len(w13_weights):
         raise ValueError(
             "MegaMoE requires w13_weight and w2_weight to have the same "

@@ -1473,7 +1473,10 @@ class Envs:
     # Feeds float16 activations to the fused op; the FP4 weight path reports a
     # float16 output prototype while the model runs in bfloat16.
     SGLANG_MEGAMOE_FP16_ACT = EnvBool(False)
-    
+    # Keeps an ND copy of the expert weights at load time; the fused operator
+    # rejects FRACTAL_NZ weights and cannot convert them lazily.
+    SGLANG_MEGAMOE_ND_WEIGHTS = EnvBool(False)
+
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

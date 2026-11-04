@@ -684,7 +684,12 @@ class NPUW8A8Int8MoEMethod(_NPUMoEMethodBase):
 
         # Process weight
         weight: torch.Tensor = getattr(layer, f"{weight_prefix}_weight")
-        weight.data = npu_format_cast(weight.data.transpose(1, 2).contiguous())
+        nd_weight = weight.data.transpose(1, 2).contiguous()
+        if envs.SGLANG_MEGAMOE_ND_WEIGHTS.get():
+            # The fused MegaMoE operator only accepts ND weights and cannot be
+            # handed a FRACTAL_NZ tensor, so keep the pre-cast layout.
+            setattr(layer, f"{weight_prefix}_weight_mega_moe", nd_weight)
+        weight.data = npu_format_cast(nd_weight)
 
         # Set dispatcher output dtype
         if weight_prefix == "w13":

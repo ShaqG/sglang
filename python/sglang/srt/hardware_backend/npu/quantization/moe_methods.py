@@ -80,6 +80,21 @@ def reshape_w4a8_mxfp_weight_scale_for_npu(scale: torch.Tensor) -> torch.Tensor:
     return scale.view(num_experts, n, k32 // 2, 2).transpose(1, 2)
 
 
+def _mega_moe_nd_copy_enabled(layer) -> bool:
+    """Whether an ND weight copy is needed for the fused MegaMoE prefill.
+
+    The operator rejects FRACTAL_NZ weights and aclnn cannot re-lay-out an
+    existing NZ tensor, so the copy has to be captured here. Enabled whenever
+    the layer's dispatcher routes prefill through the fused operator.
+    """
+
+    if envs.SGLANG_MEGAMOE_ND_WEIGHTS.is_set():
+        return envs.SGLANG_MEGAMOE_ND_WEIGHTS.get()
+    dispatcher = getattr(layer, "dispatcher", None)
+    config = getattr(dispatcher, "moe_ascend_ops_config", None)
+    return getattr(config, "prefill", None) == "fused_op"
+
+
 def prepare_w4a8_mxfp_weight(
     weight: torch.Tensor,
     weight_scale: torch.Tensor,
@@ -324,7 +339,7 @@ class NPUW4A8MXFP4MoEMethod(_NPUMoEMethodBase):
 
         weight = getattr(layer, f"{weight_prefix}_weight")
         weight_scale = getattr(layer, f"{weight_prefix}_weight_scale")
-        if envs.SGLANG_MEGAMOE_ND_WEIGHTS.get():
+        if _mega_moe_nd_copy_enabled(layer):
             # The fused MegaMoE operator only accepts ND weights; capture the
             # layout before the shared helper packs and re-formats them.
             setattr(
@@ -693,7 +708,7 @@ class NPUW8A8Int8MoEMethod(_NPUMoEMethodBase):
         # Process weight
         weight: torch.Tensor = getattr(layer, f"{weight_prefix}_weight")
         nd_weight = weight.data.transpose(1, 2).contiguous()
-        if envs.SGLANG_MEGAMOE_ND_WEIGHTS.get():
+        if _mega_moe_nd_copy_enabled(layer):
             # The fused MegaMoE operator only accepts ND weights and cannot be
             # handed a FRACTAL_NZ tensor, so keep the pre-cast layout.
             setattr(layer, f"{weight_prefix}_weight_mega_moe", nd_weight)

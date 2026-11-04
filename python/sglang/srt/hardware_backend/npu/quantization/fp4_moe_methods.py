@@ -11,6 +11,7 @@ import torch
 
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
     NPUW4A8MXFP4MoEMethod,
+    _mega_moe_nd_copy_enabled,
     prepare_w4a8_mxfp_weight,
 )
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
@@ -156,6 +157,20 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
             )
 
         nz_format = NPUACLFormat.ACL_FORMAT_FRACTAL_NZ
+        if _mega_moe_nd_copy_enabled(layer):
+            # The fused operator only accepts ND weights; keep the layout that
+            # exists before the shared helper packs and re-formats them.
+            layer.w13_weight_mega_moe = (
+                layer.w13_weight.data.view(torch.uint8)
+                .transpose(-1, -2)
+                .contiguous()
+            )
+            layer.w2_weight_mega_moe = (
+                layer.w2_weight.data.view(torch.uint8)
+                .transpose(-1, -2)
+                .contiguous()
+            )
+
         layer.w13_weight.data, w13_scale = prepare_w4a8_mxfp_weight(
             layer.w13_weight.data.view(torch.uint8),
             layer.w13_weight_scale_inv.data,

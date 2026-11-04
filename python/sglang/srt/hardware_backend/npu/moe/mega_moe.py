@@ -601,6 +601,11 @@ def _log_mega_moe_call(
         "act_params": activation_params,
         "variant": envs.SGLANG_MEGAMOE_VARIANT.get() or "none",
         "kernel": type(getattr(layer, "w2_kernel", None)).__name__,
+        "nd_copy": (
+            "yes"
+            if getattr(layer, "w13_weight_mega_moe", None) is not None
+            else "no"
+        ),
         "scale_attrs": (
             ",".join(sorted(name for name in dir(layer) if "scale" in name))
             if layer is not None

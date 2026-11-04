@@ -215,6 +215,42 @@ def mega_moe_scale_list(
     return [_pack_mega_moe_scale(item) for item in items]
 
 
+# Layer id -> (w13, w2) converted back to ND for the fused operator.
+_ND_WEIGHT_CACHE: dict[int, tuple] = {}
+
+
+def mega_moe_nd_weights(layer_key, w13_weights, w2_weights, weight_type):
+    """Return ND copies of the packed weights, converting once per layer."""
+
+    cached = _ND_WEIGHT_CACHE.get(layer_key)
+    if cached is not None:
+        return cached
+
+    from sglang.srt.hardware_backend.npu.utils import (
+        NPUACLFormat,
+        npu_format_cast,
+    )
+
+    cast_args = {}
+    if weight_type is not None:
+        cast_args = {
+            "customize_dtype": torch.float8_e4m3fn,
+            "input_dtype": weight_type,
+        }
+    cached = (
+        [
+            npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND, **cast_args)
+            for weight in w13_weights
+        ],
+        [
+            npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND, **cast_args)
+            for weight in w2_weights
+        ],
+    )
+    _ND_WEIGHT_CACHE[layer_key] = cached
+    return cached
+
+
 def mega_moe_weight_type(layer):
     """FP4 weight dtype the MXFP4-weight providers require.
 
@@ -684,6 +720,13 @@ def run_mega_moe(
     if weight_type is not None:
         mega_moe_kwargs["weight1_type"] = weight_type
         mega_moe_kwargs["weight2_type"] = weight_type
+
+    if mxfp_scales and envs.SGLANG_MEGAMOE_ND_WEIGHTS.get():
+        # The A5 prototype only accepts ND weights, while the quantizer stores
+        # them in FRACTAL_NZ for the GMM path.
+        w13_weights, w2_weights = mega_moe_nd_weights(
+            id(layer), w13_weights, w2_weights, weight_type
+        )
 
     input_dtype = None
     if envs.SGLANG_MEGAMOE_FP16_ACT.get():

@@ -210,6 +210,12 @@ def mega_moe_scale_list(
     tensor per expert and interprets the packed values as UINT64.
     """
 
+    if mxfp:
+        stacked = getattr(layer, f"{name}_mega_moe", None)
+        if stacked is not None:
+            # Kept at load time as the operator's [E, rows, K/64, 2] ND layout;
+            # the shared GMM layout would be transposed and unusable here.
+            return [stacked]
     value = getattr(layer, name, None)
     if value is None:
         # MXFP checkpoints store the block scale under the ``_inv`` name; the
@@ -567,6 +573,7 @@ def _log_mega_moe_call(
     topk_weights,
     w13_weights,
     w2_weights,
+    num_local_experts,
     scale_values,
     scale_values2,
     bias_values,
@@ -590,7 +597,7 @@ def _log_mega_moe_call(
         "mask": _describe_tensors(mask),
         "x": f"{tuple(hidden_states.shape)}/{hidden_states.dtype}",
         "topk": f"{tuple(topk_ids.shape)}/{topk_ids.dtype}/{topk_weights.dtype}",
-        "experts": f"{len(w13_weights)}x{tuple(w13_weights[0].shape)}"
+        "experts": f"{num_local_experts}x{tuple(w13_weights[0].shape)}"
         f"/{w13_weights[0].dtype}",
         "w2": f"{tuple(w2_weights[0].shape)}/{w2_weights[0].dtype}",
         "scales": _describe_tensors(scale_values),
@@ -649,17 +656,21 @@ def run_mega_moe(
 
     from sgl_kernel_npu.modules.moe import mega_moe
 
-    # The operator rejects FRACTAL_NZ weights, so prefer the ND copy kept at
+    # The operator rejects FRACTAL_NZ weights, so prefer the ND copies kept at
     # load time; fall back to the quantizer weights for the INT paths that are
     # still served in place.
     w13_source = getattr(layer, "w13_weight_mega_moe", None)
-    if w13_source is None:
-        w13_source = layer.w13_weight
     w2_source = getattr(layer, "w2_weight_mega_moe", None)
-    if w2_source is None:
-        w2_source = layer.w2_weight
-    w13_weights = mega_moe_weight_list(w13_source)
-    w2_weights = mega_moe_weight_list(w2_source, len(w13_weights))
+    if w13_source is not None and w2_source is not None:
+        # weight1/weight2 are single three-dimensional stacked tensors
+        # ([E, out, in/2]); the provider reads the expert count from dim 0.
+        w13_weights = [w13_source]
+        w2_weights = [w2_source]
+        num_local_experts = int(w13_source.shape[0])
+    else:
+        w13_weights = mega_moe_weight_list(layer.w13_weight)
+        w2_weights = mega_moe_weight_list(layer.w2_weight, len(w13_weights))
+        num_local_experts = len(w13_weights)
     if len(w2_weights) != len(w13_weights):
         raise ValueError(
             "MegaMoE requires w13_weight and w2_weight to have the same "
@@ -670,25 +681,43 @@ def run_mega_moe(
         runner_config
     )
     mxfp_scales = mega_moe_uses_mxfp_scales(layer)
-    l1_bias = mega_moe_bias_list(layer, "w13", len(w13_weights))
-    l2_bias = mega_moe_bias_list(layer, "w2", len(w2_weights))
+    l1_bias = mega_moe_bias_list(layer, "w13", num_local_experts)
+    l2_bias = mega_moe_bias_list(layer, "w2", num_local_experts)
     if l1_bias is None and (mxfp_scales or mega_moe_has_weight_scale(layer)):
         # The A5 prototype lists bias as a required input even when the
         # quantizer has no compensation term, so pass zeros.
-        l1_bias = l1_bias or [
-            torch.zeros(weight.shape[-1], dtype=torch.float32, device=weight.device)
-            for weight in w13_weights
-        ]
-        l2_bias = l2_bias or [
-            torch.zeros(weight.shape[-1], dtype=torch.float32, device=weight.device)
-            for weight in w2_weights
-        ]
+        if w13_source is not None and w2_source is not None:
+            l1_bias = l1_bias or [
+                torch.zeros(
+                    w13_source.shape[:2],
+                    dtype=torch.float32,
+                    device=w13_source.device,
+                )
+            ]
+            l2_bias = l2_bias or [
+                torch.zeros(
+                    w2_source.shape[:2], dtype=torch.float32, device=w2_source.device
+                )
+            ]
+        else:
+            l1_bias = l1_bias or [
+                torch.zeros(
+                    weight.shape[-1], dtype=torch.float32, device=weight.device
+                )
+                for weight in w13_weights
+            ]
+            l2_bias = l2_bias or [
+                torch.zeros(
+                    weight.shape[-1], dtype=torch.float32, device=weight.device
+                )
+                for weight in w2_weights
+            ]
     mega_moe_kwargs = dict(
         l1_weights_sf=mega_moe_scale_list(
-            layer, "w13_weight_scale", len(w13_weights), mxfp=mxfp_scales
+            layer, "w13_weight_scale", num_local_experts, mxfp=mxfp_scales
         ),
         l2_weights_sf=mega_moe_scale_list(
-            layer, "w2_weight_scale", len(w13_weights), mxfp=mxfp_scales
+            layer, "w2_weight_scale", num_local_experts, mxfp=mxfp_scales
         ),
         l1_bias=l1_bias,
         l2_bias=l2_bias,
@@ -777,6 +806,7 @@ def run_mega_moe(
             topk_weights=topk_weights,
             w13_weights=w13_weights,
             w2_weights=w2_weights,
+            num_local_experts=num_local_experts,
             scale_values=mega_moe_kwargs.get("l1_weights_sf"),
             scale_values2=mega_moe_kwargs.get("l2_weights_sf"),
             bias_values=mega_moe_kwargs.get("l1_bias"),
@@ -821,7 +851,7 @@ def run_mega_moe(
         if rank not in _PROBE_SEEN:
             _PROBE_SEEN.add(rank)
             ep_rank = torch.distributed.get_rank(group)
-            local_experts = len(w13_weights)
+            local_experts = num_local_experts
             probe_ids = torch.full_like(topk_ids, ep_rank * local_experts)
             probe_weights = torch.full_like(
                 topk_weights, 1.0 / max(1, int(topk_ids.shape[1]))

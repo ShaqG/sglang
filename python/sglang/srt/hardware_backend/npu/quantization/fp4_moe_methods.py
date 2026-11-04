@@ -158,18 +158,20 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
 
         nz_format = NPUACLFormat.ACL_FORMAT_FRACTAL_NZ
         if _mega_moe_nd_copy_enabled(layer):
-            # The fused operator only accepts ND weights; keep the layout that
-            # exists before the shared helper packs and re-formats them.
-            layer.w13_weight_mega_moe = (
-                layer.w13_weight.data.view(torch.uint8)
-                .transpose(-1, -2)
-                .contiguous()
-            )
-            layer.w2_weight_mega_moe = (
-                layer.w2_weight.data.view(torch.uint8)
-                .transpose(-1, -2)
-                .contiguous()
-            )
+            # The fused operator takes ND weights as one stacked three-dimensional
+            # tensor: [experts, out_channels, in_channels / 2] for the packed int4
+            # payload and [experts, out_channels, in_channels / 64, 2] for the
+            # E8M0 blocks. Capture them before the shared helper packs and
+            # re-formats them for the grouped matmuls.
+            e8m0 = getattr(torch, "float8_e8m0fnu", None)
+            for prefix in ("w13", "w2"):
+                weight = getattr(layer, f"{prefix}_weight").data
+                scale = getattr(layer, f"{prefix}_weight_scale_inv").data
+                setattr(layer, f"{prefix}_weight_mega_moe", weight.contiguous())
+                scale = scale.reshape(*scale.shape[:2], -1, 2).contiguous()
+                if e8m0 is not None:
+                    scale = scale.view(e8m0)
+                setattr(layer, f"{prefix}_weight_scale_mega_moe", scale)
 
         layer.w13_weight.data, w13_scale = prepare_w4a8_mxfp_weight(
             layer.w13_weight.data.view(torch.uint8),

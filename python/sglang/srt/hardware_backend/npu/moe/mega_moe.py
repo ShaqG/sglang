@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import logging
 from typing import Any, Dict, Optional, Tuple
 
@@ -346,6 +348,26 @@ def mega_moe_impl() -> str:
     return envs.SGLANG_MEGAMOE_IMPL.get() or "auto"
 
 
+@functools.lru_cache(maxsize=None)
+def _accepts_impl(fn) -> bool:
+    """Whether the installed sgl-kernel-npu layer exposes the provider name."""
+
+    try:
+        return "impl" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def mega_moe_impl_kwargs(fn) -> dict:
+    """Provider selector for packages that ship the impl registry.
+
+    Older sgl-kernel-npu builds bind the operator directly and reject the
+    keyword, so it is only forwarded when the installed signature takes it.
+    """
+
+    return {"impl": mega_moe_impl()} if _accepts_impl(fn) else {}
+
+
 def get_mega_moe_sym_buffer(
     runner_config,
     quant_config,
@@ -390,7 +412,7 @@ def get_mega_moe_sym_buffer(
         intermediate_hidden=key[4],
         dispatch_quant_mode=quant_mode,
         dispatch_quant_out_dtype=quant_dtype,
-        impl=mega_moe_impl(),
+        **mega_moe_impl_kwargs(get_symm_buffer_for_mega_moe),
     )
     _SYMM_BUFFER_CACHE[key] = (max_tokens, buffer)
     return buffer
@@ -840,7 +862,7 @@ def run_mega_moe(
         w13_weights,
         w2_weights,
         sym_buffer,
-        impl=mega_moe_impl(),
+        **mega_moe_impl_kwargs(mega_moe),
         **mega_moe_kwargs,
     )
     if input_dtype is not None and output.dtype != input_dtype:
@@ -879,7 +901,7 @@ def run_mega_moe(
                 w2_weights,
                 sym_buffer,
                 **mega_moe_kwargs,
-                impl=mega_moe_impl(),
+                **mega_moe_impl_kwargs(mega_moe),
             )
             logger.info(
                 "[megamoe-probe] rank=%s local_expert=%s %s",

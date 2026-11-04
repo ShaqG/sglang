@@ -335,6 +335,17 @@ def _padded_capacity(num_tokens: int) -> Optional[int]:
     return capacity
 
 
+def mega_moe_impl() -> str:
+    """Provider name passed to the sgl-kernel-npu MegaMoE registry.
+
+    ``auto`` resolves to whatever the installed package registers for this
+    generation; the HiSilicon and OTT implementations enforce different
+    platform limits, so the provider stays switchable.
+    """
+
+    return envs.SGLANG_MEGAMOE_IMPL.get() or "auto"
+
+
 def get_mega_moe_sym_buffer(
     runner_config,
     quant_config,
@@ -379,6 +390,7 @@ def get_mega_moe_sym_buffer(
         intermediate_hidden=key[4],
         dispatch_quant_mode=quant_mode,
         dispatch_quant_out_dtype=quant_dtype,
+        impl=mega_moe_impl(),
     )
     _SYMM_BUFFER_CACHE[key] = (max_tokens, buffer)
     return buffer
@@ -607,6 +619,7 @@ def _log_mega_moe_call(
         "clamp": activation_clamp,
         "act_params": activation_params,
         "variant": envs.SGLANG_MEGAMOE_VARIANT.get() or "none",
+        "impl": mega_moe_impl(),
         "kernel": type(getattr(layer, "w2_kernel", None)).__name__,
         "nd_copy": (
             "yes"
@@ -826,6 +839,7 @@ def run_mega_moe(
         w13_weights,
         w2_weights,
         sym_buffer,
+        impl=mega_moe_impl(),
         **mega_moe_kwargs,
     )
     if input_dtype is not None and output.dtype != input_dtype:
@@ -864,6 +878,7 @@ def run_mega_moe(
                 w2_weights,
                 sym_buffer,
                 **mega_moe_kwargs,
+                impl=mega_moe_impl(),
             )
             logger.info(
                 "[megamoe-probe] rank=%s local_expert=%s %s",

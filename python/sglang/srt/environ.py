@@ -1476,6 +1476,10 @@ class Envs:
     # Keeps an ND copy of the expert weights at load time; the fused operator
     # rejects FRACTAL_NZ weights and cannot convert them lazily.
     SGLANG_MEGAMOE_ND_WEIGHTS = EnvBool(False)
+    # sgl-kernel-npu registers MegaMoE per provider ("auto"/"cann"/...); the
+    # HiSilicon and OTT implementations have different platform limits, so the
+    # provider must be selectable without touching the call sites.
+    SGLANG_MEGAMOE_IMPL = EnvStr("")
 
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)

@@ -12,6 +12,7 @@ import torch
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
     NPUW4A8MXFP4MoEMethod,
     _mega_moe_nd_copy_enabled,
+    mega_moe_dispatcher_quant_config,
     prepare_w4a8_mxfp_weight,
 )
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
@@ -188,7 +189,9 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
 
         if hasattr(layer, "dispatcher"):
             layer.dispatcher.set_quant_config(
-                dict(self.w13_kernel.DISPATCHER_QUANT_CONFIG)
+                mega_moe_dispatcher_quant_config(
+                    layer, self.w13_kernel.DISPATCHER_QUANT_CONFIG
+                )
             )
 
     def apply(self, layer: torch.nn.Module, dispatch_output: "DispatchOutput"):

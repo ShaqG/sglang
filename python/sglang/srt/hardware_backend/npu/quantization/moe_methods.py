@@ -95,6 +95,21 @@ def _mega_moe_nd_copy_enabled(layer) -> bool:
     return getattr(config, "prefill", None) == "fused_op"
 
 
+def mega_moe_dispatcher_quant_config(layer, base: dict) -> dict:
+    """Dispatcher wire format for the fused MegaMoE prefill.
+
+    A5 MegaMoE only implements the MXFP dispatch paths; entering with BF16
+    activations (quant_mode 0) falls back to the A3 tiling, which caps
+    ``expertPerRank`` at 16. Keep the MXFP8 dispatch whenever the layer uses
+    the fused prefill.
+    """
+
+    config = dict(base)
+    if _mega_moe_nd_copy_enabled(layer):
+        config["normal_dispatcher_output_dtype"] = "mxfp8"
+    return config
+
+
 def prepare_w4a8_mxfp_weight(
     weight: torch.Tensor,
     weight_scale: torch.Tensor,
@@ -352,7 +367,9 @@ class NPUW4A8MXFP4MoEMethod(_NPUMoEMethodBase):
         )
 
         if weight_prefix == "w13" and hasattr(layer, "dispatcher"):
-            layer.dispatcher.set_quant_config(dict(self.DISPATCHER_QUANT_CONFIG))
+            layer.dispatcher.set_quant_config(
+                mega_moe_dispatcher_quant_config(layer, self.DISPATCHER_QUANT_CONFIG)
+            )
 
     def apply(
         self,

@@ -215,14 +215,19 @@ def mega_moe_scale_list(
     return [_pack_mega_moe_scale(item) for item in items]
 
 
-# Layer id -> (w13, w2) converted back to ND for the fused operator.
-_ND_WEIGHT_CACHE: dict[int, tuple] = {}
+# Layer id -> w13 tensors in plain FRACTAL_NZ, built once per layer.
+_PLAIN_NZ_W13_CACHE: dict[int, list] = {}
 
 
-def mega_moe_nd_weights(layer_key, w13_weights, w2_weights, weight_type):
-    """Return ND copies of the packed weights, converting once per layer."""
+def mega_moe_plain_nz_w13(layer_key, w13_weights, weight_type):
+    """Re-cast w13 to plain FRACTAL_NZ, as ``mx_fp4_e2m1`` requires.
 
-    cached = _ND_WEIGHT_CACHE.get(layer_key)
+    Only the second-layer weight keeps the packed-FP4 ``C0_32`` storage; the
+    first-layer weight must stay in plain NZ. The shared quantizer casts both
+    with the FP4 kwargs, so undo it here, once per layer.
+    """
+
+    cached = _PLAIN_NZ_W13_CACHE.get(layer_key)
     if cached is not None:
         return cached
 
@@ -237,17 +242,14 @@ def mega_moe_nd_weights(layer_key, w13_weights, w2_weights, weight_type):
             "customize_dtype": torch.float8_e4m3fn,
             "input_dtype": weight_type,
         }
-    cached = (
-        [
-            npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND, **cast_args)
-            for weight in w13_weights
-        ],
-        [
-            npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND, **cast_args)
-            for weight in w2_weights
-        ],
-    )
-    _ND_WEIGHT_CACHE[layer_key] = cached
+    cached = [
+        npu_format_cast(
+            npu_format_cast(weight, NPUACLFormat.ACL_FORMAT_ND, **cast_args),
+            NPUACLFormat.ACL_FORMAT_FRACTAL_NZ,
+        )
+        for weight in w13_weights
+    ]
+    _PLAIN_NZ_W13_CACHE[layer_key] = cached
     return cached
 
 
@@ -722,10 +724,10 @@ def run_mega_moe(
         mega_moe_kwargs["weight2_type"] = weight_type
 
     if mxfp_scales and envs.SGLANG_MEGAMOE_ND_WEIGHTS.get():
-        # The A5 prototype only accepts ND weights, while the quantizer stores
-        # them in FRACTAL_NZ for the GMM path.
-        w13_weights, w2_weights = mega_moe_nd_weights(
-            id(layer), w13_weights, w2_weights, weight_type
+        # The MXFP contract keeps w13 in plain FRACTAL_NZ and only stores the
+        # second-layer weight as packed-FP4 C0_32.
+        w13_weights = mega_moe_plain_nz_w13(
+            id(layer), w13_weights, weight_type
         )
 
     input_dtype = None

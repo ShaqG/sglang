@@ -148,15 +148,24 @@ def _marker_pack_scale(scale_int64: torch.Tensor) -> torch.Tensor:
     return (bits | (1 << 46)).view(torch.uint64)
 
 
+def _fp32_bits_to_uint64(scale: torch.Tensor) -> torch.Tensor:
+    """Reference ``pack_scale_to_uint64``: fp32 bits widened into UINT64."""
+
+    return (
+        scale.reshape(-1).contiguous().view(torch.int32).to(torch.int64).view(torch.uint64)
+    )
+
+
 def _pack_mega_moe_scale(scale: torch.Tensor) -> torch.Tensor:
     """Convert one processed NPU scale tensor to the A3 MegaMoE layout."""
 
     scale = scale.contiguous()
     marker = envs.SGLANG_MEGAMOE_SCALE_MARKER.get()
     if scale.dtype in (torch.float16, torch.bfloat16):
-        # The W8A8 quantizer keeps per-channel scales in half precision and
-        # the operator consumes them as-is.
-        return scale.reshape(-1)
+        # The INT8 dispatch contract takes UINT64 scales whose low 32 bits hold
+        # the fp32 value, so the per-channel half-precision scale the W8A8
+        # quantizer keeps has to be widened back instead of passed through.
+        return _fp32_bits_to_uint64(scale.float())
     if scale.dtype == torch.float32:
         scale_fp32 = scale.reshape(-1)
         if marker:

@@ -253,9 +253,18 @@ def cast_e2m1fn_to_e4m3fn(
         fp4_block_size, dim=-1
     )
     x = (x * offset).transpose(1, 2).reshape(out_dim, in_dim)
-    return x.to(torch.float8_e4m3fn), scale_max_offset_bits.squeeze(-1).to(
-        torch.float8_e8m0fnu
-    )
+    scale_max = scale_max_offset_bits.squeeze(-1).contiguous()
+    try:
+        scale_max = scale_max.to(torch.float8_e8m0fnu)
+    except RuntimeError:
+        # Some torch_npu releases fail the device-side float32 -> e8m0 copy
+        # (aclnnInplaceCopy 561103). e8m0 stores only a biased exponent, so
+        # encode those bits directly instead.
+        exponent = torch.round(torch.log2(scale_max.float().clamp_min(2.0**-127)))
+        scale_max = (exponent + 127).clamp(0, 255).to(torch.uint8).view(
+            torch.float8_e8m0fnu
+        )
+    return x.to(torch.float8_e4m3fn), scale_max
 
 
 class Fp8Config(QuantizationConfig):

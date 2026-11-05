@@ -176,6 +176,7 @@ from sglang.srt.models.deepseek_v2 import (
 from sglang.srt.models.deepseek_v4_mhc import MHC_POST_MULT_VALUE
 from sglang.srt.models.deepseek_v4_platform_stage import (
     NonCudaDecoderMixin,
+    _dbg_stats,
     forward_layer_fused_boundary,
     fused_boundary_attn_input,
 )
@@ -4425,6 +4426,8 @@ class DeepseekV4Model(nn.Module):
             from sglang.kernels.ops.layernorm.mhc import hc_broadcast
 
             hidden_states = hc_broadcast(hidden_states, self.hc_mult)
+            if not forward_batch.forward_mode.is_idle():
+                _dbg_stats("embed_out", hidden_states)
         else:
             assert pp_proxy_tensors is not None
             hidden_states = pp_proxy_tensors["hidden_states"]
@@ -4600,6 +4603,7 @@ class DeepseekV4Model(nn.Module):
                 tail=tail, rows=pre_hc_head, num_tokens=num_tokens
             )
 
+        _dbg_stats("final_hidden", hidden_states)
         if capture_dspark:
             return (hidden_states, pre_hc_head), dspark_aux_hidden_states.finalize()
 

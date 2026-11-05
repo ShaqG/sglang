@@ -5,6 +5,7 @@ The mixins own platform mHC state, fusion, and TBO operations.
 
 from __future__ import annotations
 
+import os
 from functools import cached_property
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
@@ -92,6 +93,35 @@ def _prepare_ffn_input(layer, hidden_states, residual, post, comb, forward_batch
         hidden_states = layer.post_attention_layernorm(hidden_states)
 
     return residual, hidden_states, post, comb
+
+
+# TEMPORARY numeric probe for the Ascend A5 baseline bring-up; remove once the
+# output is correct. Prints one digest line per activation when
+# SGLANG_DSV4_DEBUG_STATS=1 so the first corrupting layer can be located.
+_DBG_STATS_ON = os.environ.get("SGLANG_DSV4_DEBUG_STATS") == "1"
+_DBG_STATS_BUDGET = int(os.environ.get("SGLANG_DSV4_DEBUG_STATS_BUDGET", "400"))
+
+
+def _dbg_stats(tag: str, value) -> None:
+    global _DBG_STATS_BUDGET
+    if not _DBG_STATS_ON or _DBG_STATS_BUDGET <= 0:
+        return
+    if not torch.is_tensor(value):
+        value = getattr(value, "hidden_states", None)
+    if not torch.is_tensor(value) or value.numel() == 0:
+        return
+    _DBG_STATS_BUDGET -= 1
+    t = value.detach().float()
+    rank = 0
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        rank = torch.distributed.get_rank()
+    print(
+        f"[DSV4DBG r{rank}] {tag} shape={tuple(t.shape)} dtype={value.dtype} "
+        f"nan={int(torch.isnan(t).sum())} inf={int(torch.isinf(t).sum())} "
+        f"min={t.min().item():.4f} max={t.max().item():.4f} "
+        f"absmean={t.abs().mean().item():.4f}",
+        flush=True,
+    )
 
 
 class NonCudaDecoderMixin:
@@ -303,6 +333,8 @@ class NonCudaDecoderMixin:
                 forward_batch=forward_batch,
                 x_quant=x_quant,
             )
+        if not forward_batch.forward_mode.is_idle():
+            _dbg_stats(f"L{getattr(self, 'layer_id', -1)}.attn_out", hidden_states)
 
         del fused
         residual, hidden_states, post, comb = _prepare_ffn_input(
@@ -315,6 +347,8 @@ class NonCudaDecoderMixin:
             input_ids=input_ids,
             input_ids_global=input_ids_global,
         )
+        if not forward_batch.forward_mode.is_idle():
+            _dbg_stats(f"L{getattr(self, 'layer_id', -1)}.moe_out", hidden_states)
 
         if not use_fused:
             hidden_states = self.hc_post(hidden_states, residual, post, comb)

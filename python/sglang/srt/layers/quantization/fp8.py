@@ -2216,8 +2216,17 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                         )
                         new_weights.append(w)
                         new_scales.append(s)
-                    weight_param.data = torch.stack(new_weights)
-                    scale_param.data = torch.stack(new_scales).float()
+                    # aclnnStack rejects FP8 operands on Ascend, so stack the
+                    # raw bytes and reinterpret the result (metadata-only view).
+                    weight_param.data = torch.stack(
+                        [w.view(torch.uint8) for w in new_weights]
+                    ).view(new_weights[0].dtype)
+                    scale_bits = torch.stack([s.view(torch.uint8) for s in new_scales])
+                    # e8m0 holds a biased power-of-two exponent only, so decode
+                    # the value directly instead of relying on an FP8 cast.
+                    scale_param.data = torch.pow(
+                        2.0, (scale_bits.to(torch.int32) - 127).to(torch.float32)
+                    )
                     scale_param.format_ue8m0 = False
                 self.is_fp4_expert = False
                 logger.warning_once("Dequantized FP4 expert weights to FP8.")

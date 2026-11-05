@@ -112,6 +112,11 @@ def _dbg_stats(tag: str, value) -> None:
         return
     _DBG_STATS_BUDGET -= 1
     t = value.detach().float()
+    if t.numel() > 4_000_000:
+        # Whole-pool buffers are far too large to widen; sample the head of the
+        # buffer, which is where a fresh KV pool's first request lands.
+        t = t.reshape(-1)[:1_000_000]
+        tag = f"{tag}(sample1M)"
     rank = 0
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         rank = torch.distributed.get_rank()
@@ -327,6 +332,10 @@ class NonCudaDecoderMixin:
             x_quant = None
 
         with self.self_attn.maybe_use_decode_attn_tp(forward_batch):
+            if not forward_batch.forward_mode.is_idle() and getattr(
+                self, "layer_id", -1
+            ) <= 1:
+                _dbg_stats(f"L{self.layer_id}.attn_in", hidden_states)
             hidden_states = self.self_attn(
                 x=hidden_states,
                 positions=positions,

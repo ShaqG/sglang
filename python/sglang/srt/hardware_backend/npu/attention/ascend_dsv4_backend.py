@@ -2128,8 +2128,20 @@ class DeepseekV4AscendAttnBackend(
         ori_sparse_indices = getattr(fm, "ori_sparse_indices", None)
         if ori_sparse_indices is not None:
             attn_kwargs["ori_sparse_indices"] = ori_sparse_indices
+        if layer.layer_id <= 1:
+            # TEMPORARY bring-up probe; removed together with _dbg_stats.
+            from sglang.srt.models.deepseek_v4_platform_stage import _dbg_stats
+
+            _dbg_stats(f"L{layer.layer_id}.swa.q", q)
+            _dbg_stats(f"L{layer.layer_id}.swa.ori_kv", ori_kv)
+            _dbg_stats(f"L{layer.layer_id}.swa.page_table", fm.swa_page_table)
+            _dbg_stats(f"L{layer.layer_id}.swa.seqused_kv", fm.actual_seq_lengths_kv)
         q_arg = attn_kwargs.pop("q")
         out, _ = attn_op(q_arg, **attn_kwargs)
+        if layer.layer_id <= 1:
+            from sglang.srt.models.deepseek_v4_platform_stage import _dbg_stats
+
+            _dbg_stats(f"L{layer.layer_id}.swa.out", out)
         return out
 
     def _forward_compressed(
@@ -2229,11 +2241,24 @@ class DeepseekV4AscendAttnBackend(
     def store_cache(self, *, layer_id: int, swa_k: torch.Tensor, forward_batch):
         pool = self.token_to_kv_pool
         swa_loc = self.get_swa_out_cache_loc(forward_batch)
+        if layer_id <= 1:
+            # TEMPORARY bring-up probe; removed together with _dbg_stats.
+            from sglang.srt.models.deepseek_v4_platform_stage import _dbg_stats
+
+            _dbg_stats(f"L{layer_id}.swa_k_in", swa_k)
+            _dbg_stats(f"L{layer_id}.swa_loc", swa_loc)
         pool.set_swa_buffer(
             layer_id=layer_id,
             loc=swa_loc,
             cache=swa_k,
         )
+        if layer_id <= 1:
+            from sglang.srt.models.deepseek_v4_platform_stage import _dbg_stats
+
+            _dbg_stats(
+                f"L{layer_id}.swa_k_readback",
+                pool.get_swa_buffer(layer_id, loc=swa_loc),
+            )
 
     def _build_npu_compress_metadata_verify(self, forward_batch: ForwardBatch) -> None:
         fm = self.forward_metadata

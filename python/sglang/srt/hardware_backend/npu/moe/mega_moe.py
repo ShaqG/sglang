@@ -423,38 +423,12 @@ def run_mega_moe(
         runner_config
     )
     mxfp_scales = mega_moe_uses_mxfp_scales(layer)
+    # CANN 9.2.0 requires l1_bias/l2_bias to be None on Ascend 950; only the
+    # A8W4-INT quantizer carries a real compensation term. 9.1.0 wanted zero
+    # tensors for the same arguments, so keep this aligned with the 9.2.0
+    # contract from now on.
     l1_bias = mega_moe_bias_list(layer, "w13", num_local_experts)
     l2_bias = mega_moe_bias_list(layer, "w2", num_local_experts)
-    if l1_bias is None and mxfp_scales:
-        # The A5 prototype lists bias as a required input even though MXFP
-        # modes carry no compensation term, so pass zeros. A3 takes ``None``
-        # for A8W8-INT and A16W16, matching the reference operator tests.
-        if w13_source is not None and w2_source is not None:
-            l1_bias = l1_bias or [
-                torch.zeros(
-                    w13_source.shape[:2],
-                    dtype=torch.float32,
-                    device=w13_source.device,
-                )
-            ]
-            l2_bias = l2_bias or [
-                torch.zeros(
-                    w2_source.shape[:2], dtype=torch.float32, device=w2_source.device
-                )
-            ]
-        else:
-            l1_bias = l1_bias or [
-                torch.zeros(
-                    weight.shape[-1], dtype=torch.float32, device=weight.device
-                )
-                for weight in w13_weights
-            ]
-            l2_bias = l2_bias or [
-                torch.zeros(
-                    weight.shape[-1], dtype=torch.float32, device=weight.device
-                )
-                for weight in w2_weights
-            ]
     mega_moe_kwargs = dict(
         l1_weights_sf=mega_moe_scale_list(
             layer, "w13_weight_scale", num_local_experts, mxfp=mxfp_scales

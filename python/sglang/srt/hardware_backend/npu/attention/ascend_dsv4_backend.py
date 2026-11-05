@@ -2133,9 +2133,19 @@ class DeepseekV4AscendAttnBackend(
             from sglang.srt.models.deepseek_v4_platform_stage import _dbg_stats
 
             _dbg_stats(f"L{layer.layer_id}.swa.q", q)
+            _dbg_stats(f"L{layer.layer_id}.swa.sink", attn_sink)
             _dbg_stats(f"L{layer.layer_id}.swa.ori_kv", ori_kv)
             _dbg_stats(f"L{layer.layer_id}.swa.page_table", fm.swa_page_table)
             _dbg_stats(f"L{layer.layer_id}.swa.seqused_kv", fm.actual_seq_lengths_kv)
+            print(
+                f"[DSV4DBG] L{layer.layer_id}.swa.meta "
+                f"scaling={float(layer.scaling)} q_dtype={q.dtype} "
+                f"q_shape={tuple(q.shape)} kv_dim={ori_kv.shape[-1]} "
+                f"page_size={ori_kv.shape[1]} num_pages={ori_kv.shape[0]} "
+                f"win_left={attn_kwargs['ori_win_left']} "
+                f"sink={'none' if attn_sink is None else tuple(attn_sink.shape)}",
+                flush=True,
+            )
         q_arg = attn_kwargs.pop("q")
         out, _ = attn_op(q_arg, **attn_kwargs)
         if layer.layer_id <= 1:
@@ -2253,12 +2263,21 @@ class DeepseekV4AscendAttnBackend(
             cache=swa_k,
         )
         if layer_id <= 1:
+            # TEMPORARY bring-up probe; removed together with _dbg_stats.
+            # The pool is FP8, and aclnnIndex rejects DT_FLOAT8_E4M3FN, so read
+            # the written rows with a slice + a metadata-only byte view.
             from sglang.srt.models.deepseek_v4_platform_stage import _dbg_stats
 
-            _dbg_stats(
-                f"L{layer_id}.swa_k_readback",
-                pool.get_swa_buffer(layer_id, loc=swa_loc),
-            )
+            try:
+                flat = pool.get_swa_buffer(layer_id).flatten(0, 1)
+                lo = int(swa_loc.min().item())
+                hi = int(swa_loc.max().item()) + 1
+                _dbg_stats(
+                    f"L{layer_id}.swa_buf_written", flat[lo:hi].view(torch.uint8)
+                )
+                _dbg_stats(f"L{layer_id}.swa_buf_head", flat[0 : hi - lo].view(torch.uint8))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[DSV4DBG] swa readback probe failed: {exc}", flush=True)
 
     def _build_npu_compress_metadata_verify(self, forward_batch: ForwardBatch) -> None:
         fm = self.forward_metadata

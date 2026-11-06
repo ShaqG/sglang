@@ -589,7 +589,14 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
         # The wrapper owns the CANN-version ABI (block-scale dtype, row stride
         # and quant flags) so the write always matches the packed layout that
         # a5_packed_kv_dim reserved and the attention reader expects.
-        kv_compress_epilog(buf, cache_2d, slot_mapping)
+        #
+        # "auto" resolves to cann_ops_transformer_cann920 on CANN 9.2, but that
+        # binding lives in the bundled third-party release library
+        # (sgl_kernel_npu._third_party.sgl_ops_transformer), which this image
+        # does not install, and the wrapper deliberately has no fallback. Its
+        # own eager reference covers both packed encodings, so use it until the
+        # image ships the released operator library.
+        kv_compress_epilog(buf, cache_2d, slot_mapping, impl="torch_native")
 
     def set_swa_key_buffer_radix_fused_norm_rope(
         self,

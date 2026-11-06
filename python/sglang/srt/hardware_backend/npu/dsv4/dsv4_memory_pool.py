@@ -15,11 +15,11 @@ There is no paged state allocator or ``cache_mode=1`` compatibility storage.
 
 from __future__ import annotations
 
-import math
 from typing import List, Optional, Tuple
 
 import torch
 import torch_npu
+from sgl_kernel_npu.operators.mem_cache import get_npu_kv_quant_path, kv_compress_epilog
 
 from sglang.kernels.ops.attention.dsv4.kv_layout import KVLayout
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE
@@ -32,9 +32,6 @@ from sglang.srt.mem_cache.deepseek_v4_memory_pool import (
     DeepSeekV4TokenToKVPool,
 )
 from sglang.srt.runtime_context import get_schedule
-
-_NPU_ARCH35_KV_QUANT_GROUP_SIZE = 64
-_NPU_ARCH35_KV_ROW_ALIGNMENT = 128
 
 
 class NPUDeepSeekV4SingleKVPool(DeepSeekV4SingleKVPool):
@@ -59,12 +56,12 @@ class NPUDeepSeekV4SingleKVPool(DeepSeekV4SingleKVPool):
     def a5_packed_kv_dim(self) -> int:
         nope_dim = self.qk_nope_head_dim
         rope_dim = self.qk_rope_head_dim
-        scale_dim = math.ceil(nope_dim / _NPU_ARCH35_KV_QUANT_GROUP_SIZE)
-        bytes_per_token = nope_dim + rope_dim * 2 + scale_dim
-        return (
-            math.ceil(bytes_per_token / _NPU_ARCH35_KV_ROW_ALIGNMENT)
-            * _NPU_ARCH35_KV_ROW_ALIGNMENT
-        )
+        # The packed row width is an SDK property, not a constant: the released
+        # CANN stores BF16 block scales in 32-aligned rows, while the original
+        # 9.1 layout used E8M0 scales in 128-aligned rows. Sizing the buffer by
+        # hand leaves the writer and the reader on different strides, which
+        # silently turns the KV cache into garbage.
+        return get_npu_kv_quant_path().packed_dim(nope_dim, rope_dim)
 
     def create_buffer(self, *, num_pages: int):
         # Non-bf16 store dtype (shouldn't happen here) falls back to base layout.
@@ -589,15 +586,10 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
             )
         if cache_2d.shape[0] == 0:
             return
-        torch.ops.npu.kv_compress_epilog(
-            buf.view(-1, 1, buf.shape[-1]),
-            cache_2d,
-            slot_mapping,
-            quant_group_size=_NPU_ARCH35_KV_QUANT_GROUP_SIZE,
-            quant_mode=2,
-            round_scale_flag=True,
-            layout=1,
-        )
+        # The wrapper owns the CANN-version ABI (block-scale dtype, row stride
+        # and quant flags) so the write always matches the packed layout that
+        # a5_packed_kv_dim reserved and the attention reader expects.
+        kv_compress_epilog(buf, cache_2d, slot_mapping)
 
     def set_swa_key_buffer_radix_fused_norm_rope(
         self,

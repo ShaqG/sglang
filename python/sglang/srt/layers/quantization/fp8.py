@@ -253,18 +253,9 @@ def cast_e2m1fn_to_e4m3fn(
         fp4_block_size, dim=-1
     )
     x = (x * offset).transpose(1, 2).reshape(out_dim, in_dim)
-    scale_max = scale_max_offset_bits.squeeze(-1).contiguous()
-    try:
-        scale_max = scale_max.to(torch.float8_e8m0fnu)
-    except RuntimeError:
-        # Some torch_npu releases fail the device-side float32 -> e8m0 copy
-        # (aclnnInplaceCopy 561103). e8m0 stores only a biased exponent, so
-        # encode those bits directly instead.
-        exponent = torch.round(torch.log2(scale_max.float().clamp_min(2.0**-127)))
-        scale_max = (exponent + 127).clamp(0, 255).to(torch.uint8).view(
-            torch.float8_e8m0fnu
-        )
-    return x.to(torch.float8_e4m3fn), scale_max
+    return x.to(torch.float8_e4m3fn), scale_max_offset_bits.squeeze(-1).to(
+        torch.float8_e8m0fnu
+    )
 
 
 class Fp8Config(QuantizationConfig):
@@ -2216,17 +2207,8 @@ class Fp8MoEMethod(FusedMoEMethodBase):
                         )
                         new_weights.append(w)
                         new_scales.append(s)
-                    # aclnnStack rejects FP8 operands on Ascend, so stack the
-                    # raw bytes and reinterpret the result (metadata-only view).
-                    weight_param.data = torch.stack(
-                        [w.view(torch.uint8) for w in new_weights]
-                    ).view(new_weights[0].dtype)
-                    scale_bits = torch.stack([s.view(torch.uint8) for s in new_scales])
-                    # e8m0 holds a biased power-of-two exponent only, so decode
-                    # the value directly instead of relying on an FP8 cast.
-                    scale_param.data = torch.pow(
-                        2.0, (scale_bits.to(torch.int32) - 127).to(torch.float32)
-                    )
+                    weight_param.data = torch.stack(new_weights)
+                    scale_param.data = torch.stack(new_scales).float()
                     scale_param.format_ue8m0 = False
                 self.is_fp4_expert = False
                 logger.warning_once("Dequantized FP4 expert weights to FP8.")

@@ -151,6 +151,7 @@ def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
         print(
             f"[DSV4DBG] L{layer.layer_id}.ref "
             f"T={T} H={q.shape[1]} D={q.shape[2]} window={window} "
+            f"k={tuple(k.shape)} k_bad={_dbg_nan_rows(kf)} "
             f"ref_bad={_dbg_nan_rows(ref)} op_bad={_dbg_nan_rows(of)}",
             flush=True,
         )

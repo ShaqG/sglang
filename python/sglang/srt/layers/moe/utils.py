@@ -115,17 +115,19 @@ class AscendOpsConfig:
     """Configuration for the ``ascend_ops`` MoE A2A backend.
 
     Selects the prefill and decode execution paths:
-    - ``prefill``: ``allgather`` (TP AllGather -> local compute -> TP ReduceScatter)
-      or ``alltoallv`` (TP AllToAllv -> compute -> TP AllToAllv).
+    - ``prefill``: ``allgather`` (TP AllGather -> local compute -> TP ReduceScatter),
+      ``alltoallv`` (TP AllToAllv -> compute -> TP AllToAllv), or ``fused_op``
+      (single MegaMoE dispatch/compute/combine operator).
     - ``decode``: ``low_latency`` (EP MC2 dispatch_v2 -> gmm -> activation ->
-      gmm -> combine_v2) or ``fused_op`` (single dispatch_ffn_combine).
+      gmm -> combine_v2) or ``fused_op`` (single MegaMoE dispatch/compute/
+      combine operator).
     - ``ll_dispatch_alg`` / ``ll_combine_alg``: the ``comm_alg`` handed to the
       MC2 dispatch/combine ops of the ``low_latency`` path. The defaults are the
       ones recommended by the operator owners (full-mesh dispatch, default
       combine).
     """
 
-    PREFILL_CHOICES = ("allgather", "alltoallv")
+    PREFILL_CHOICES = ("allgather", "alltoallv", "fused_op")
     DECODE_CHOICES = ("low_latency", "fused_op")
 
     prefill: str = "alltoallv"
@@ -143,11 +145,6 @@ class AscendOpsConfig:
             raise ValueError(
                 f"invalid moe-ascend-ops-config decode mode {self.decode!r}; "
                 f"expected one of {self.DECODE_CHOICES}"
-            )
-        if self.decode == "fused_op":
-            raise ValueError(
-                "moe-ascend-ops-config decode mode 'fused_op' is not implemented; "
-                "use 'low_latency'"
             )
 
     @classmethod

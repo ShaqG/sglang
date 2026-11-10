@@ -11,6 +11,8 @@ import torch
 
 from sglang.srt.hardware_backend.npu.quantization.moe_methods import (
     NPUW4A8MXFP4MoEMethod,
+    _mega_moe_nd_copy_enabled,
+    mega_moe_dispatcher_quant_config,
 )
 from sglang.srt.hardware_backend.npu.quantization.moe_utils import (
     build_ascend_quant_info,
@@ -161,6 +163,22 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
             )
 
         nz_format = NPUACLFormat.ACL_FORMAT_FRACTAL_NZ
+        if _mega_moe_nd_copy_enabled(layer):
+            # The fused operator takes ND weights as one stacked three-dimensional
+            # tensor: [experts, out_channels, in_channels / 2] for the packed int4
+            # payload and [experts, out_channels, in_channels / 64, 2] for the
+            # E8M0 blocks. Capture them before the shared helper packs and
+            # re-formats them for the grouped matmuls.
+            e8m0 = getattr(torch, "float8_e8m0fnu", None)
+            for prefix in ("w13", "w2"):
+                weight = getattr(layer, f"{prefix}_weight").data
+                scale = getattr(layer, f"{prefix}_weight_scale_inv").data
+                setattr(layer, f"{prefix}_weight_mega_moe", weight.contiguous())
+                scale = scale.reshape(*scale.shape[:2], -1, 2).contiguous()
+                if e8m0 is not None:
+                    scale = scale.view(e8m0)
+                setattr(layer, f"{prefix}_weight_scale_mega_moe", scale)
+
         process_npu_fp4_expert_weights(layer, npu_format=nz_format)
         layer.w13_weight_scale_inv = torch.nn.Parameter(
             layer.w13_weight_scale_inv.data, requires_grad=False
@@ -171,7 +189,9 @@ class NPUW4A8MXFP4FusedMoEMethod(FusedMoEMethodBase):
 
         if hasattr(layer, "dispatcher"):
             layer.dispatcher.set_quant_config(
-                dict(self.w13_kernel.DISPATCHER_QUANT_CONFIG)
+                mega_moe_dispatcher_quant_config(
+                    layer, self.w13_kernel.DISPATCHER_QUANT_CONFIG
+                )
             )
 
     def apply(self, layer: torch.nn.Module, dispatch_output: "DispatchOutput"):

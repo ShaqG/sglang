@@ -1518,6 +1518,20 @@ class Envs:
     # read by several call sites; do not use in new code.
     SGLANG_DEEPEP_BF16_DISPATCH = EnvBool(False)
     SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
+    # Capacity padding for the ascend_ops MegaMoE (fused_op) path.
+    # PAD_TO_CAPACITY pads each batch to MAX_TOKENS_PER_RANK and passes an int8
+    # x_active_mask, the layout the A3 MegaMoE contract asks for. The capacity
+    # must match on every rank; A3 caps it at 4096.
+    SGLANG_MEGAMOE_PAD_TO_CAPACITY = EnvBool(False)
+    SGLANG_MEGAMOE_MAX_TOKENS_PER_RANK = EnvInt(4096)
+    # Keeps an ND copy of the expert weights at load time; the fused operator
+    # rejects FRACTAL_NZ weights and cannot convert them lazily.
+    SGLANG_MEGAMOE_ND_WEIGHTS = EnvBool(False)
+    # sgl-kernel-npu registers MegaMoE per provider ("auto"/"cann"/...); the
+    # HiSilicon and OTT implementations have different platform limits, so the
+    # provider must be selectable without touching the call sites.
+    SGLANG_MEGAMOE_IMPL = EnvStr("")
+
     # Per-rank buffer capacity, not a model token limit.
     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.

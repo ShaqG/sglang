@@ -245,6 +245,32 @@ class AscendRunnerCore(MoeRunnerCore):
         Execute the MoE layer using NPU‑specific grouped matmul ops.
         """
         x = runner_input.hidden_states
+        mega_moe_state = running_state.get("ascend_ops_forward_state")
+        if mega_moe_state is not None:
+            from sglang.srt.layers.moe.token_dispatcher.ascend_ops import (
+                _MegaMoEState,
+            )
+
+            # MegaMoE is a runner execution mode. It consumes the same
+            # forward-state handoff as the communication paths and returns a
+            # normal AscendRunnerOutput for the post-permute hook.
+            if isinstance(mega_moe_state, _MegaMoEState):
+                from sglang.srt.hardware_backend.npu.moe.mega_moe import (
+                    run_mega_moe,
+                )
+
+                output = run_mega_moe(
+                    self.config,
+                    mega_moe_state.quant_config,
+                    x,
+                    mega_moe_state.topk_weights,
+                    mega_moe_state.topk_ids,
+                    group=mega_moe_state.group,
+                    dtype_mode=mega_moe_state.dtype_mode,
+                )
+                if mega_moe_state.num_valid_rows is not None:
+                    output = output[: mega_moe_state.num_valid_rows]
+                return AscendRunnerOutput(hidden_states=output)
         original_dtype = torch.float16 if x.dtype == torch.float16 else torch.bfloat16
         expert_tokens = runner_input.expert_tokens
         group_list_type = runner_input.group_list_type
@@ -423,6 +449,20 @@ def pre_permute_ascend_ops_to_ascend(
             expert_tokens=dispatch_output.expert_tokens.to(torch.int64),
             group_list_type=dispatch_output.group_list_type,
         )
+    if mode == "fused_op":
+        from sglang.srt.layers.moe.token_dispatcher.ascend_ops import _MegaMoEState
+
+        if not isinstance(dispatch_output.forward_state, _MegaMoEState):
+            raise RuntimeError("MegaMoE dispatch output is missing forward state")
+        running_state["ascend_ops_forward_state"] = dispatch_output.forward_state
+        return AscendRunnerInput(
+            hidden_states=dispatch_output.hidden_states,
+            hidden_states_scale=None,
+            expert_tokens=torch.empty(
+                0, dtype=torch.int64, device=dispatch_output.hidden_states.device
+            ),
+            group_list_type=dispatch_output.group_list_type,
+        )
     raise NotImplementedError(f"unknown ascend_ops exec mode {mode!r}")
 
 
@@ -455,7 +495,28 @@ def _pre_permute_alltoallv(
     if quant_mode not in (-1, INT8_QUANT_MODE) and received_scale is not None:
         received_scale = _reshape_received_scale(received_scale)
 
-    if num_local_experts > 1 and received.shape[0] > 0:
+    received_num_rows = received.shape[0]
+    expert_tokens = recv_counts.sum(dim=0).to(torch.int64)
+    if received_num_rows == 0:
+        # HCCL can legitimately return an empty receive when no source rank
+        # routed to this rank's experts.  Ascend grouped GEMM/routing kernels
+        # reject zero-row inputs, so execute one zero dummy row and remove it
+        # before the reverse AllToAllV.  The original split metadata remains
+        # unchanged, therefore the dummy never enters the communication result.
+        local_permuted = received.new_zeros((1, *received.shape[1:]))
+        local_expanded_row_idx = torch.zeros(
+            1, dtype=torch.int32, device=received.device
+        )
+        local_scale = (
+            received_scale.new_zeros((1, *received_scale.shape[1:]))
+            if received_scale is not None
+            else None
+        )
+        expert_tokens = torch.zeros(
+            num_local_experts, dtype=torch.int64, device=received.device
+        )
+        expert_tokens[0] = 1
+    elif num_local_experts > 1:
         routed = npu_moe_init_routing(
             received,
             local_ids,
@@ -480,11 +541,12 @@ def _pre_permute_alltoallv(
     if state is None:
         raise RuntimeError("alltoallv dispatch output is missing forward state")
     state.local_expanded_row_idx = local_expanded_row_idx
+    state.local_num_valid_rows = received_num_rows
     running_state["ascend_ops_forward_state"] = state
     return AscendRunnerInput(
         hidden_states=local_permuted,
         hidden_states_scale=local_scale,
-        expert_tokens=recv_counts.sum(dim=0).to(torch.int64),
+        expert_tokens=expert_tokens,
         group_list_type=dispatch_output.group_list_type,
     )
 
@@ -635,6 +697,7 @@ def post_permute_ascend_to_ascend_ops(
         AscendOpsCombineInput,
         _AllGatherState,
         _AllToAllVState,
+        _MegaMoEState,
     )
 
     state = running_state.pop("ascend_ops_forward_state", None)
@@ -645,12 +708,19 @@ def post_permute_ascend_to_ascend_ops(
         if local_expanded_row_idx is None:
             raise RuntimeError("alltoallv forward state is missing local row map")
         hidden_states = runner_output.hidden_states
-        if runner_config.num_local_experts > 1 and hidden_states.shape[0] > 0:
+        if state.local_num_valid_rows == 0:
+            # The pre-permute supplied one kernel-safe dummy row.  Remove it
+            # before the reverse AllToAllV, whose original split sizes still
+            # describe zero real rows for this rank.
+            hidden_states = hidden_states[:0]
+        elif runner_config.num_local_experts > 1 and hidden_states.shape[0] > 0:
             hidden_states = npu_moe_finalize_routing(
                 hidden_states, local_expanded_row_idx
             )
     elif isinstance(state, _AllGatherState):
         hidden_states = _allgather_weighted_sum(runner_output, runner_config, state)
+    elif isinstance(state, _MegaMoEState):
+        hidden_states = runner_output.hidden_states
     else:
         # MC2 / decode: the combine op applies the top-k weights itself.
         hidden_states = runner_output.hidden_states

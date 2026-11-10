@@ -5,7 +5,7 @@ import torch
 from torch.nn.parameter import Parameter
 
 from sglang.srt.environ import envs
-from sglang.srt.hardware_backend.npu.utils import npu_format_cast
+from sglang.srt.hardware_backend.npu.utils import is_npu_arch35, npu_format_cast
 from sglang.srt.layers.quantization.base_config import FusedMoEMethodBase
 
 if TYPE_CHECKING:
@@ -41,6 +41,38 @@ def _pair_pack_mxfp_act_scale(scale: torch.Tensor) -> torch.Tensor:
     if scale.shape[-1] % 2 != 0:
         raise ValueError(f"Invalid MXFP per-token scale shape: {tuple(scale.shape)}")
     return scale.reshape(scale.shape[0], scale.shape[1] // 2, 2)
+
+
+def _mega_moe_nd_copy_enabled(layer) -> bool:
+    """Whether an ND weight copy is needed for the fused MegaMoE prefill.
+
+    Only A5 (arch35) rejects FRACTAL_NZ and cannot re-lay-out an existing NZ
+    tensor, so the copy has to be captured here. A3 keeps its native
+    per-expert NZ weights, which is what its operator contract expects.
+    """
+
+    if envs.SGLANG_MEGAMOE_ND_WEIGHTS.is_set():
+        return envs.SGLANG_MEGAMOE_ND_WEIGHTS.get()
+    if not is_npu_arch35():
+        return False
+    dispatcher = getattr(layer, "dispatcher", None)
+    config = getattr(dispatcher, "moe_ascend_ops_config", None)
+    return getattr(config, "prefill", None) == "fused_op"
+
+
+def mega_moe_dispatcher_quant_config(layer, base: dict) -> dict:
+    """Dispatcher wire format for the fused MegaMoE prefill.
+
+    A5 MegaMoE only implements the MXFP dispatch paths; entering with BF16
+    activations (quant_mode 0) falls back to the A3 tiling, which caps
+    ``expertPerRank`` at 16. Keep the MXFP8 dispatch whenever the layer uses
+    the fused prefill.
+    """
+
+    config = dict(base)
+    if _mega_moe_nd_copy_enabled(layer):
+        config["normal_dispatcher_output_dtype"] = "mxfp8"
+    return config
 
 
 def w4a8_mxfp_gmm(
@@ -254,12 +286,22 @@ class NPUW4A8MXFP4MoEMethod(_NPUMoEMethodBase):
 
         weight = getattr(layer, f"{weight_prefix}_weight")
         weight_scale = getattr(layer, f"{weight_prefix}_weight_scale")
+        if _mega_moe_nd_copy_enabled(layer):
+            # The fused MegaMoE operator only accepts ND weights; capture the
+            # layout before the shared helper packs and re-formats them.
+            setattr(
+                layer,
+                f"{weight_prefix}_weight_mega_moe",
+                weight.data.transpose(-1, -2).contiguous(),
+            )
         weight.data, weight_scale.data = prepare_w4a8_mxfp_weight(
             weight.data, weight_scale.data
         )
 
         if weight_prefix == "w13" and hasattr(layer, "dispatcher"):
-            layer.dispatcher.set_quant_config(dict(self.DISPATCHER_QUANT_CONFIG))
+            layer.dispatcher.set_quant_config(
+                mega_moe_dispatcher_quant_config(layer, self.DISPATCHER_QUANT_CONFIG)
+            )
 
     def apply(
         self,
@@ -614,7 +656,12 @@ class NPUW8A8Int8MoEMethod(_NPUMoEMethodBase):
 
         # Process weight
         weight: torch.Tensor = getattr(layer, f"{weight_prefix}_weight")
-        weight.data = npu_format_cast(weight.data.transpose(1, 2).contiguous())
+        nd_weight = weight.data.transpose(1, 2).contiguous()
+        if _mega_moe_nd_copy_enabled(layer):
+            # The fused MegaMoE operator only accepts ND weights and cannot be
+            # handed a FRACTAL_NZ tensor, so keep the pre-cast layout.
+            setattr(layer, f"{weight_prefix}_weight_mega_moe", nd_weight)
+        weight.data = npu_format_cast(nd_weight)
 
         # Set dispatcher output dtype
         if weight_prefix == "w13":

@@ -105,17 +105,21 @@ def _dbg_nan_rows(tensor) -> list:
 def _dbg_row_abs(tag: str, tensor) -> None:
     """Row-wise magnitudes plus the count of exactly-zero rows.
 
-    An attention row cannot be exactly zero, so ``zero_rows`` counts rows the
-    operator never wrote. Works for any token count, unlike the reference probe.
+    An attention row cannot be exactly zero, so the reported zero indices are
+    rows the operator never wrote. Works for any token count, unlike the
+    reference probe.
     """
 
     try:
         t = tensor.detach().float().abs()
         per = t.reshape(t.shape[0], -1).mean(dim=1)
+        mid = per.shape[0] // 2
         print(
             f"[DSV4DBG] {tag} rows={per.shape[0]} "
-            f"zero_rows={int((per == 0).sum())} "
+            f"zero_idx={(per == 0).nonzero().flatten()[:24].tolist()} "
+            f"nan_idx={(~torch.isfinite(per)).nonzero().flatten()[:24].tolist()} "
             f"head={[round(float(x), 6) for x in per[:4]]} "
+            f"mid={[round(float(x), 6) for x in per[max(0, mid - 2) : mid + 2]]} "
             f"tail={[round(float(x), 6) for x in per[-4:]]}",
             flush=True,
         )

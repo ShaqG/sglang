@@ -248,6 +248,9 @@ def _dbg_stats(tag: str, tensor) -> None:
         return
     if not isinstance(tensor, torch.Tensor):
         return
+    # Idle DP ranks run the layer with an empty token axis.
+    if tensor.numel() == 0:
+        return
     _DBG_STATS_BUDGET[0] -= 1
     try:
         t = tensor.detach().float()

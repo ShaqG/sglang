@@ -102,6 +102,9 @@ def _dbg_nan_rows(tensor) -> list:
     return bad.nonzero().flatten().tolist()
 
 
+_DBG_REF_ARMED = [False]
+
+
 def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
     """Torch reference for the SWA path: causal + sliding window + sink.
 
@@ -115,6 +118,9 @@ def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
 
         if not get_bool_env_var("SGLANG_DSV4_DBG_REF"):
             return
+        if not _DBG_REF_ARMED[0]:
+            _DBG_REF_ARMED[0] = True
+            print("[DSV4DBG] ref probe armed", flush=True)
         if k is None or q.shape[0] > 32 or out.shape[0] != q.shape[0]:
             return
         # The raw K only covers this batch's own tokens, so the reference is a

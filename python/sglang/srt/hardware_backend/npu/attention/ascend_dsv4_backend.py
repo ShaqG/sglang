@@ -81,6 +81,19 @@ def _dbg_swa_io(layer_id: int, tag: str, tensor) -> None:
         print(f"[DSV4DBG] {tag} probe failed: {type(exc).__name__} {exc}", flush=True)
 
 
+def _dbg_token_nan(layer_id: int, tag: str, tensor) -> None:
+    """Per-token NaN counts, so a partial corruption shows which rows broke."""
+
+    try:
+        if not torch.is_tensor(tensor) or tensor.shape[0] == 0:
+            return
+        t = tensor.detach().float()
+        per = torch.isnan(t).reshape(t.shape[0], -1).sum(dim=1).tolist()
+        print(f"[DSV4DBG] L{layer_id}.{tag}_per_token {per}", flush=True)
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] {tag} per-token failed: {type(exc).__name__} {exc}", flush=True)
+
+
 def _sparse_attn_kv_quant_kwargs() -> dict:
     """Extra kwargs the A5 kv-quant kernels need to interpret the KV layout."""
     if is_npu_arch35():
@@ -2420,6 +2433,8 @@ class DeepseekV4AscendAttnBackend(
         out, _ = attn_op(q_arg, **attn_kwargs)
         if layer.layer_id < 2:
             _dbg_swa_io(layer.layer_id, "swa_out", out)
+            _dbg_token_nan(layer.layer_id, "swa_out", out)
+            _dbg_token_nan(layer.layer_id, "swa_q", q_arg)
         return out
 
     def _forward_compressed(

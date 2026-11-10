@@ -55,6 +55,32 @@ def _sparse_attn_ops():
     )
 
 
+def _dbg_kv_write(pool, layer_id: int, swa_k: torch.Tensor, swa_loc) -> None:
+    """Read the packed KV rows back and compare them with what was written."""
+
+    try:
+        from sglang.srt.models.deepseek_v4 import _dbg_stats
+
+        _dbg_stats(f"L{layer_id}.swa_k_in", swa_k)
+        _dbg_stats(f"L{layer_id}.swa_loc", swa_loc)
+        buf = pool.get_swa_buffer(layer_id)
+        rows = buf.view(torch.uint8).reshape(-1, buf.shape[-1])[swa_loc]
+        _dbg_stats(f"L{layer_id}.swa_written", rows)
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] kv readback failed: {type(exc).__name__} {exc}", flush=True)
+
+
+def _dbg_swa_io(layer_id: int, tag: str, tensor) -> None:
+    """Log one sparse-attention input/output sample for the bring-up."""
+
+    try:
+        from sglang.srt.models.deepseek_v4 import _dbg_stats
+
+        _dbg_stats(f"L{layer_id}.{tag}", tensor)
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] {tag} probe failed: {type(exc).__name__} {exc}", flush=True)
+
+
 def _sparse_attn_kv_quant_kwargs() -> dict:
     """Extra kwargs the A5 kv-quant kernels need to interpret the KV layout."""
     if is_npu_arch35():
@@ -2387,7 +2413,13 @@ class DeepseekV4AscendAttnBackend(
             attn_kwargs["ori_topk_length"] = fm.ori_topk_length
         _, attn_op = _sparse_attn_ops()
         q_arg = attn_kwargs.pop("q")
+        if layer.layer_id < 2:
+            _dbg_swa_io(layer.layer_id, "q", q_arg)
+            _dbg_swa_io(layer.layer_id, "page_table", fm.swa_page_table)
+            _dbg_swa_io(layer.layer_id, "seqused_kv", fm.actual_seq_lengths_kv)
         out, _ = attn_op(q_arg, **attn_kwargs)
+        if layer.layer_id < 2:
+            _dbg_swa_io(layer.layer_id, "swa_out", out)
         return out
 
     def _forward_compressed(
@@ -2497,6 +2529,8 @@ class DeepseekV4AscendAttnBackend(
             loc=swa_loc,
             cache=swa_k,
         )
+        if layer_id < 2:
+            _dbg_kv_write(pool, layer_id, swa_k, swa_loc)
 
     def _build_npu_compress_metadata_verify(self, forward_batch: ForwardBatch) -> None:
         fm = self.forward_metadata

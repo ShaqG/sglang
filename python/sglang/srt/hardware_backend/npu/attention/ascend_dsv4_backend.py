@@ -102,6 +102,50 @@ def _dbg_nan_rows(tensor) -> list:
     return bad.nonzero().flatten().tolist()
 
 
+def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
+    """Torch reference for the SWA path: causal + sliding window + sink.
+
+    Uses the unquantized bf16 K that was just written to the cache, so a finite
+    reference next to a NaN operator row proves the geometry is right and the
+    kernel is at fault.
+    """
+
+    try:
+        from sglang.srt.utils import get_bool_env_var
+
+        if not get_bool_env_var("SGLANG_DSV4_DBG_REF"):
+            return
+        if k is None or q.shape[0] > 32 or out.shape[0] != q.shape[0]:
+            return
+        # The raw K only covers this batch's own tokens, so the reference is a
+        # full-sequence check only for a prefill-shaped batch.
+        T = q.shape[0]
+        if T < 2 or k.shape[0] != T:
+            return
+        qf = q.detach().float()
+        kf = k.detach().float()
+        scores = torch.einsum("qhd,kd->qhk", qf, kf) * layer.scaling
+        idx = torch.arange(T, device=q.device)
+        keep = (idx[None, :] <= idx[:, None]) & (idx[None, :] >= idx[:, None] - window)
+        scores = scores.masked_fill(~keep[:, None, :], float("-inf"))
+        m = scores.amax(dim=-1, keepdim=True)
+        p = torch.exp(scores - m)
+        denom = p.sum(dim=-1)
+        if sink is not None:
+            denom = denom + torch.exp(sink.detach().float() - m.squeeze(-1))
+        ref = torch.einsum("qhk,kd->qhd", p / denom.unsqueeze(-1), kf)
+        of = out.detach().float()
+        diff = (of - ref).abs().amax(dim=(1, 2))
+        print(
+            f"[DSV4DBG] L{layer.layer_id}.ref "
+            f"ref_bad={_dbg_nan_rows(ref)} op_bad={_dbg_nan_rows(of)} "
+            f"maxdiff={[round(float(x), 4) for x in diff]}",
+            flush=True,
+        )
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] ref probe failed: {type(exc).__name__} {exc}", flush=True)
+
+
 def _sparse_attn_kv_quant_kwargs() -> dict:
     """Extra kwargs the A5 kv-quant kernels need to interpret the KV layout."""
     if is_npu_arch35():
@@ -2390,7 +2434,7 @@ class DeepseekV4AscendAttnBackend(
                 layer_id=layer.layer_id, swa_k=k, forward_batch=forward_batch
             )
         if compress_ratio == 0:
-            return self._forward_swa(q, layer, forward_batch, attn_sink)
+            return self._forward_swa(q, layer, forward_batch, attn_sink, debug_k=k)
         return self._forward_compressed(
             q, layer, forward_batch, attn_sink, compress_ratio
         )
@@ -2401,6 +2445,7 @@ class DeepseekV4AscendAttnBackend(
         layer: RadixAttention,
         forward_batch: ForwardBatch,
         attn_sink: Optional[torch.Tensor],
+        debug_k: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         fm = self.forward_metadata
         pool = self.token_to_kv_pool
@@ -2469,6 +2514,14 @@ class DeepseekV4AscendAttnBackend(
             _dbg_swa_io(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_q", q_arg)
+            _dbg_ref_swa(
+                layer,
+                out,
+                q_arg,
+                debug_k,
+                attn_sink,
+                window=int(fm.ori_win_left),
+            )
             print(
                 f"[DSV4DBG] L{layer.layer_id}.mask "
                 f"ori_win_left={fm.ori_win_left} ori_win_right={fm.ori_win_right} "

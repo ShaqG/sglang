@@ -102,6 +102,27 @@ def _dbg_nan_rows(tensor) -> list:
     return bad.nonzero().flatten().tolist()
 
 
+def _dbg_row_abs(tag: str, tensor) -> None:
+    """Row-wise magnitudes plus the count of exactly-zero rows.
+
+    An attention row cannot be exactly zero, so ``zero_rows`` counts rows the
+    operator never wrote. Works for any token count, unlike the reference probe.
+    """
+
+    try:
+        t = tensor.detach().float().abs()
+        per = t.reshape(t.shape[0], -1).mean(dim=1)
+        print(
+            f"[DSV4DBG] {tag} rows={per.shape[0]} "
+            f"zero_rows={int((per == 0).sum())} "
+            f"head={[round(float(x), 6) for x in per[:4]]} "
+            f"tail={[round(float(x), 6) for x in per[-4:]]}",
+            flush=True,
+        )
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] {tag} row-abs failed: {type(exc).__name__} {exc}", flush=True)
+
+
 _DBG_REF_ARMED = [False]
 
 
@@ -159,6 +180,15 @@ def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
             f"[DSV4DBG] L{layer.layer_id}.ref_err "
             f"maxdiff={[round(float(x), 4) for x in maxdiff]} "
             f"reldiff={[round(float(x), 4) for x in reldiff]}",
+            flush=True,
+        )
+        # A row that the operator never wrote shows up as exactly zero, which a
+        # real attention output cannot be, so this separates "wrong math" from
+        # "output rows left untouched".
+        print(
+            f"[DSV4DBG] L{layer.layer_id}.ref_abs "
+            f"op={[round(float(x), 6) for x in of.abs().mean(dim=(1, 2))]} "
+            f"ref={[round(float(x), 6) for x in ref.abs().mean(dim=(1, 2))]}",
             flush=True,
         )
     except Exception as exc:  # never let the probe break a run
@@ -2547,6 +2577,7 @@ class DeepseekV4AscendAttnBackend(
             _dbg_swa_io(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_q", q_arg)
+            _dbg_row_abs(f"L{layer.layer_id}.out_abs", out)
             _dbg_ref_swa(
                 layer,
                 out,

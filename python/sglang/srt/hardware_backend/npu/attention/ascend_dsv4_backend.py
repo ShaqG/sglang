@@ -2435,6 +2435,14 @@ class DeepseekV4AscendAttnBackend(
             _dbg_swa_io(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_q", q_arg)
+            print(
+                f"[DSV4DBG] L{layer.layer_id}.mask "
+                f"ori_win_left={fm.ori_win_left} ori_win_right={fm.ori_win_right} "
+                f"ori_mask_mode={fm.ori_mask_mode} sinks={'None' if attn_sink is None else tuple(attn_sink.shape)} "
+                f"positions={forward_batch.positions[:16].tolist()} "
+                f"scaling={layer.scaling}",
+                flush=True,
+            )
         return out
 
     def _forward_compressed(

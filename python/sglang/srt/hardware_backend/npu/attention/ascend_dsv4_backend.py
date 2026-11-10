@@ -130,9 +130,6 @@ def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
             return
         qf = q.detach().float()
         kf = k.detach().float()
-        # MLA carries a single KV head, so the raw K arrives as (T, 1, D).
-        if kf.dim() == 3:
-            kf = kf.reshape(kf.shape[0], -1)
         if kf.dim() != 2:
             print(f"[DSV4DBG] ref probe skipped, k={tuple(k.shape)}", flush=True)
             return
@@ -2460,6 +2457,20 @@ class DeepseekV4AscendAttnBackend(
             q, layer, forward_batch, attn_sink, compress_ratio
         )
 
+    def _dbg_ref_k(self, layer_id: int, candidate):
+        """The latent K actually written to the cache, for the reference probe.
+
+        ``forward`` receives ``q`` as a sentinel when the KV store already ran in
+        the model's prepare step, so only a 2-D candidate is the real latent.
+        """
+
+        if candidate is not None and candidate.dim() == 2:
+            return candidate
+        stored = getattr(self, "_dbg_stored_k", None)
+        if stored is not None and stored[0] == layer_id:
+            return stored[1]
+        return None
+
     def _forward_swa(
         self,
         q: torch.Tensor,
@@ -2539,7 +2550,7 @@ class DeepseekV4AscendAttnBackend(
                 layer,
                 out,
                 q_arg,
-                debug_k,
+                self._dbg_ref_k(layer.layer_id, debug_k),
                 attn_sink,
                 window=int(fm.ori_win_left),
             )
@@ -2662,6 +2673,7 @@ class DeepseekV4AscendAttnBackend(
         )
         if layer_id < 2:
             _dbg_kv_write(pool, layer_id, swa_k, swa_loc)
+            self._dbg_stored_k = (layer_id, swa_k)
 
     def _build_npu_compress_metadata_verify(self, forward_batch: ForwardBatch) -> None:
         fm = self.forward_metadata

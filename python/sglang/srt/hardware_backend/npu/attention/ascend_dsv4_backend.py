@@ -94,6 +94,14 @@ def _dbg_token_nan(layer_id: int, tag: str, tensor) -> None:
         print(f"[DSV4DBG] {tag} per-token failed: {type(exc).__name__} {exc}", flush=True)
 
 
+def _dbg_nan_rows(tensor) -> list:
+    """Indices of the tokens whose row is fully non-finite, for a compact diff."""
+
+    t = tensor.detach().float()
+    bad = ~torch.isfinite(t).reshape(t.shape[0], -1).all(dim=1)
+    return bad.nonzero().flatten().tolist()
+
+
 def _sparse_attn_kv_quant_kwargs() -> dict:
     """Extra kwargs the A5 kv-quant kernels need to interpret the KV layout."""
     if is_npu_arch35():
@@ -2430,8 +2438,34 @@ class DeepseekV4AscendAttnBackend(
             _dbg_swa_io(layer.layer_id, "q", q_arg)
             _dbg_swa_io(layer.layer_id, "page_table", fm.swa_page_table)
             _dbg_swa_io(layer.layer_id, "seqused_kv", fm.actual_seq_lengths_kv)
+            if attn_sink is not None:
+                _dbg_swa_io(layer.layer_id, "sink", attn_sink)
+            cu_q = fm.actual_seq_lengths_q_pa
+            seqused_q = attn_kwargs.get("seqused_q")
+            print(
+                f"[DSV4DBG] L{layer.layer_id}.qmeta "
+                f"T={tuple(q_arg.shape)} "
+                f"cu_q={None if cu_q is None else cu_q.tolist()} "
+                f"seqused_q={None if seqused_q is None else seqused_q.tolist()} "
+                f"seqused_kv={attn_kwargs.get('seqused_ori_kv').tolist()}",
+                flush=True,
+            )
         out, _ = attn_op(q_arg, **attn_kwargs)
         if layer.layer_id < 2:
+            from sglang.srt.utils import get_bool_env_var
+
+            if get_bool_env_var("SGLANG_DSV4_DBG_REPEAT"):
+                # Same inputs, second call: if the NaN rows move, the operator is
+                # leaving output rows unwritten instead of computing NaN.
+                out2, _ = attn_op(q_arg, **attn_kwargs)
+                match = torch.equal(
+                    torch.isnan(out.float()), torch.isnan(out2.float())
+                )
+                print(
+                    f"[DSV4DBG] L{layer.layer_id}.repeat_nan_match {match} "
+                    f"first={_dbg_nan_rows(out)} second={_dbg_nan_rows(out2)}",
+                    flush=True,
+                )
             _dbg_swa_io(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_q", q_arg)

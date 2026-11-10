@@ -230,6 +230,42 @@ if _is_npu:
     import torch_npu
 
 
+_DBG_STATS_BUDGET = [400]
+_DBG_STATS_ENABLED = [None]
+
+
+def _dbg_stats(tag: str, tensor) -> None:
+    """Opt-in per-layer numeric probe for the DSV4 bring-up.
+
+    Prints shape/dtype/nan/inf/min/max/absmean for a sampled activation. The
+    line budget keeps a stuck run from flooding the log; set
+    ``SGLANG_DSV4_DEBUG_STATS=1`` to enable it.
+    """
+
+    if _DBG_STATS_ENABLED[0] is None:
+        _DBG_STATS_ENABLED[0] = get_bool_env_var("SGLANG_DSV4_DEBUG_STATS")
+    if not _DBG_STATS_ENABLED[0] or _DBG_STATS_BUDGET[0] <= 0:
+        return
+    if not isinstance(tensor, torch.Tensor):
+        return
+    _DBG_STATS_BUDGET[0] -= 1
+    try:
+        t = tensor.detach().float()
+        nan = int(torch.isnan(t).sum())
+        inf = int(torch.isinf(t).sum())
+        t = torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+        rank = get_parallel().tp_rank if hasattr(get_parallel(), "tp_rank") else 0
+        print(
+            f"[DSV4DBG r{rank}] {tag:<12s} shape={tuple(tensor.shape)} "
+            f"dtype={tensor.dtype} nan={nan} inf={inf} "
+            f"min={float(t.min()):.4f} max={float(t.max()):.4f} "
+            f"absmean={float(t.abs().mean()):.4f}",
+            flush=True,
+        )
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] {tag} probe failed: {type(exc).__name__} {exc}", flush=True)
+
+
 class MhcOps(NamedTuple):
     hc_split_sinkhorn: Callable[..., Any]
     mhc_fused_post_pre: Optional[Callable[..., Any]]
@@ -4530,6 +4566,7 @@ class DeepseekV4Model(nn.Module):
             from sglang.kernels.ops.layernorm.mhc import hc_broadcast
 
             hidden_states = hc_broadcast(hidden_states, self.hc_mult)
+            _dbg_stats("embed_out", hidden_states)
         else:
             assert pp_proxy_tensors is not None
             hidden_states = pp_proxy_tensors["hidden_states"]
@@ -4651,6 +4688,7 @@ class DeepseekV4Model(nn.Module):
                             prev_post=prev_post,
                             prev_comb=prev_comb,
                         )
+                        _dbg_stats(f"L{i}.out", hidden_states)
                 if capture_dspark and i in self.dspark_layers_to_capture:
                     from sglang.kernels.ops.layernorm.mhc import mhc_stream_mean
 
@@ -4704,6 +4742,9 @@ class DeepseekV4Model(nn.Module):
             pre_hc_head = _scatter_tail_rows(
                 tail=tail, rows=pre_hc_head, num_tokens=num_tokens
             )
+
+        _dbg_stats("final_hidden", hidden_states)
+        _dbg_stats("final_pre_hc", pre_hc_head)
 
         if capture_dspark:
             return (hidden_states, pre_hc_head), dspark_aux_hidden_states.finalize()

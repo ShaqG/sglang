@@ -130,6 +130,12 @@ def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
             return
         qf = q.detach().float()
         kf = k.detach().float()
+        # MLA carries a single KV head, so the raw K arrives as (T, 1, D).
+        if kf.dim() == 3:
+            kf = kf.reshape(kf.shape[0], -1)
+        if kf.dim() != 2:
+            print(f"[DSV4DBG] ref probe skipped, k={tuple(k.shape)}", flush=True)
+            return
         scores = torch.einsum("qhd,kd->qhk", qf, kf) * layer.scaling
         idx = torch.arange(T, device=q.device)
         keep = (idx[None, :] <= idx[:, None]) & (idx[None, :] >= idx[:, None] - window)

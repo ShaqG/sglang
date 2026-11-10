@@ -147,11 +147,20 @@ def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
             denom = denom + torch.exp(sink.detach().float() - m.squeeze(-1))
         ref = torch.einsum("qhk,kd->qhd", p / denom.unsqueeze(-1), kf)
         of = out.detach().float()
-        diff = (of - ref).abs().amax(dim=(1, 2))
+        maxdiff = (of - ref).abs().amax(dim=(1, 2))
+        # Relative error is the scale-free check: fp8 KV quantization keeps it
+        # near 1e-2 for a correct row, while a wrong value layout pushes it to ~1.
+        reldiff = (of - ref).norm(dim=(1, 2)) / ref.norm(dim=(1, 2))
         print(
             f"[DSV4DBG] L{layer.layer_id}.ref "
-            f"ref_bad={_dbg_nan_rows(ref)} op_bad={_dbg_nan_rows(of)} "
-            f"maxdiff={[round(float(x), 4) for x in diff]}",
+            f"T={T} H={q.shape[1]} D={q.shape[2]} window={window} "
+            f"ref_bad={_dbg_nan_rows(ref)} op_bad={_dbg_nan_rows(of)}",
+            flush=True,
+        )
+        print(
+            f"[DSV4DBG] L{layer.layer_id}.ref_err "
+            f"maxdiff={[round(float(x), 4) for x in maxdiff]} "
+            f"reldiff={[round(float(x), 4) for x in reldiff]}",
             flush=True,
         )
     except Exception as exc:  # never let the probe break a run

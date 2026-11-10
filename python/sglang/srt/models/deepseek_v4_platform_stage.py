@@ -296,6 +296,11 @@ class NonCudaDecoderMixin:
         else:
             x_quant = None
 
+        if getattr(self, "layer_id", 99) < 2:
+            from sglang.srt.models.deepseek_v4 import _dbg_stats
+
+            _dbg_stats(f"L{self.layer_id}.attn_in", hidden_states)
+
         with self.self_attn.maybe_use_decode_attn_tp(forward_batch):
             hidden_states = self.self_attn(
                 x=hidden_states,
@@ -303,6 +308,9 @@ class NonCudaDecoderMixin:
                 forward_batch=forward_batch,
                 x_quant=x_quant,
             )
+
+        if getattr(self, "layer_id", 99) < 2:
+            _dbg_stats(f"L{self.layer_id}.attn_out", hidden_states)
 
         del fused
         residual, hidden_states, post, comb = _prepare_ffn_input(
@@ -315,6 +323,9 @@ class NonCudaDecoderMixin:
             input_ids=input_ids,
             input_ids_global=input_ids_global,
         )
+
+        if getattr(self, "layer_id", 99) < 2:
+            _dbg_stats(f"L{self.layer_id}.moe_out", hidden_states)
 
         if not use_fused:
             hidden_states = self.hc_post(hidden_states, residual, post, comb)

@@ -209,6 +209,19 @@ def _sparse_attn_kv_quant_kwargs() -> dict:
     return {}
 
 
+def _dbg_attn_impl() -> Optional[str]:
+    """Force one registered implementation of the sparse-attention operator.
+
+    ``mixed_quant_sparse_flash_mla`` dispatches through the SDK impl registry
+    (``auto`` by default), so pinning it is the only way to tell which
+    implementation produced a given output.
+    """
+
+    import os
+
+    return os.environ.get("SGLANG_DSV4_ATTN_IMPL") or None
+
+
 def _dspark_sparse_width(swa_window: int, block_size: int) -> int:
     """128-aligned width of the DSpark sparse-index rows."""
     return -(-(swa_window + block_size) // 128) * 128
@@ -2540,6 +2553,12 @@ class DeepseekV4AscendAttnBackend(
             cmp_ratio=1,
         )
         attn_kwargs |= _seqused_q_kwargs(fm.actual_seq_lengths_q_pa)
+        attn_impl = _dbg_attn_impl()
+        if attn_impl is not None:
+            attn_kwargs["impl"] = attn_impl
+            print(
+                f"[DSV4DBG] L{layer.layer_id}.impl forced={attn_impl}", flush=True
+            )
         ori_sparse_indices = fm.ori_sparse_indices
         if ori_sparse_indices is not None:
             attn_kwargs["ori_sparse_indices"] = ori_sparse_indices

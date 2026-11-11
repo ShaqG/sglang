@@ -127,6 +127,32 @@ def _dbg_row_abs(tag: str, tensor) -> None:
         print(f"[DSV4DBG] {tag} row-abs failed: {type(exc).__name__} {exc}", flush=True)
 
 
+def _dbg_kv_rows(ori_kv, table, seqused) -> None:
+    """Per-row magnitudes of the unpacked KV the reference actually reads."""
+
+    try:
+        from sgl_kernel_npu.implementation.torch_native.attention.attention import (
+            unpack_kv,
+        )
+
+        kv = unpack_kv(ori_kv.detach())
+        page = ori_kv.shape[1]
+        length = int(seqused[0])
+        pos = torch.arange(length, device=table.device)
+        slots = table[0, pos // page].long() * page + pos % page
+        rows = kv[slots].float()
+        per = rows.abs().reshape(rows.shape[0], -1).mean(dim=1)
+        print(
+            f"[DSV4DBG] kv_rows slots={slots[:4].tolist()}..{slots[-2:].tolist()} "
+            f"zero_idx={(per == 0).nonzero().flatten()[:24].tolist()} "
+            f"nan_idx={(~torch.isfinite(per)).nonzero().flatten()[:24].tolist()} "
+            f"abs={[round(float(x), 6) for x in per[:12]]}",
+            flush=True,
+        )
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] kv_rows failed: {type(exc).__name__} {exc}", flush=True)
+
+
 _DBG_REF_ARMED = [False]
 
 
@@ -2606,6 +2632,8 @@ class DeepseekV4AscendAttnBackend(
             _dbg_token_nan(layer.layer_id, "swa_out", out)
             _dbg_token_nan(layer.layer_id, "swa_q", q_arg)
             _dbg_row_abs(f"L{layer.layer_id}.out_abs", out)
+            _dbg_row_abs(f"L{layer.layer_id}.q_abs", q_arg)
+            _dbg_kv_rows(ori_kv, fm.swa_page_table, fm.actual_seq_lengths_kv)
             _dbg_ref_swa(
                 layer,
                 out,

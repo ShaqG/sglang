@@ -66,6 +66,13 @@ def _dbg_kv_write(pool, layer_id: int, swa_k: torch.Tensor, swa_loc) -> None:
         buf = pool.get_swa_buffer(layer_id)
         rows = buf.view(torch.uint8).reshape(-1, buf.shape[-1])[swa_loc]
         _dbg_stats(f"L{layer_id}.swa_written", rows)
+        _dbg_row_abs(f"L{layer_id}.write_rows", rows)
+        print(
+            f"[DSV4DBG] L{layer_id}.kv_buf shape={tuple(buf.shape)} "
+            f"dtype={buf.dtype} stride={tuple(buf.stride())} "
+            f"loc_dtype={swa_loc.dtype} loc={swa_loc[:12].tolist()}",
+            flush=True,
+        )
     except Exception as exc:  # never let the probe break a run
         print(f"[DSV4DBG] kv readback failed: {type(exc).__name__} {exc}", flush=True)
 

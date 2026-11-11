@@ -605,11 +605,23 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
             )
         if cache_2d.shape[0] == 0:
             return
-        kv_compress_epilog(
-            buf,
-            cache_2d,
-            slot_mapping,
-        )
+        import os
+
+        write_impl = os.environ.get("SGLANG_DSV4_KVWRITE_IMPL") or None
+        if write_impl is None:
+            kv_compress_epilog(
+                buf,
+                cache_2d,
+                slot_mapping,
+            )
+        else:
+            print(f"[DSV4DBG] kvwrite impl forced={write_impl}", flush=True)
+            kv_compress_epilog(
+                buf,
+                cache_2d,
+                slot_mapping,
+                impl=write_impl,
+            )
 
     def set_swa_key_buffer_radix_fused_norm_rope(
         self,

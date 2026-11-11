@@ -2384,6 +2384,11 @@ class DeepseekV4AscendAttnBackend(
             "layout_kv": "PA_BBND",
             **_seqused_q_kwargs(actual_seq_lengths_q_pa),
         }
+        meta_impl = _dbg_attn_impl()
+        if meta_impl is not None:
+            # The reference metadata is a Python object rather than the native
+            # byte blob, so a pinned impl has to cover both operators.
+            common["impl"] = meta_impl
         base_kwargs = {
             "batch_size": bs,
             "num_heads_q": self._dsv4_q_head_num,

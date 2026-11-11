@@ -55,183 +55,6 @@ def _sparse_attn_ops():
     )
 
 
-def _dbg_kv_write(pool, layer_id: int, swa_k: torch.Tensor, swa_loc) -> None:
-    """Read the packed KV rows back and compare them with what was written."""
-
-    try:
-        from sglang.srt.models.deepseek_v4 import _dbg_stats
-
-        _dbg_stats(f"L{layer_id}.swa_k_in", swa_k)
-        _dbg_stats(f"L{layer_id}.swa_loc", swa_loc)
-        buf = pool.get_swa_buffer(layer_id)
-        rows = buf.view(torch.uint8).reshape(-1, buf.shape[-1])[swa_loc]
-        _dbg_stats(f"L{layer_id}.swa_written", rows)
-        _dbg_row_abs(f"L{layer_id}.write_rows", rows)
-        print(
-            f"[DSV4DBG] L{layer_id}.kv_buf shape={tuple(buf.shape)} "
-            f"dtype={buf.dtype} stride={tuple(buf.stride())} "
-            f"loc_dtype={swa_loc.dtype} loc={swa_loc[:12].tolist()}",
-            flush=True,
-        )
-    except Exception as exc:  # never let the probe break a run
-        print(f"[DSV4DBG] kv readback failed: {type(exc).__name__} {exc}", flush=True)
-
-
-def _dbg_swa_io(layer_id: int, tag: str, tensor) -> None:
-    """Log one sparse-attention input/output sample for the bring-up."""
-
-    try:
-        from sglang.srt.models.deepseek_v4 import _dbg_stats
-
-        _dbg_stats(f"L{layer_id}.{tag}", tensor)
-    except Exception as exc:  # never let the probe break a run
-        print(f"[DSV4DBG] {tag} probe failed: {type(exc).__name__} {exc}", flush=True)
-
-
-def _dbg_token_nan(layer_id: int, tag: str, tensor) -> None:
-    """Per-token NaN counts, so a partial corruption shows which rows broke."""
-
-    try:
-        if not torch.is_tensor(tensor) or tensor.shape[0] == 0:
-            return
-        t = tensor.detach().float()
-        per = torch.isnan(t).reshape(t.shape[0], -1).sum(dim=1).tolist()
-        print(f"[DSV4DBG] L{layer_id}.{tag}_per_token {per}", flush=True)
-    except Exception as exc:  # never let the probe break a run
-        print(f"[DSV4DBG] {tag} per-token failed: {type(exc).__name__} {exc}", flush=True)
-
-
-def _dbg_nan_rows(tensor) -> list:
-    """Indices of the tokens whose row is fully non-finite, for a compact diff."""
-
-    t = tensor.detach().float()
-    bad = ~torch.isfinite(t).reshape(t.shape[0], -1).all(dim=1)
-    return bad.nonzero().flatten().tolist()
-
-
-def _dbg_row_abs(tag: str, tensor) -> None:
-    """Row-wise magnitudes plus the count of exactly-zero rows.
-
-    An attention row cannot be exactly zero, so the reported zero indices are
-    rows the operator never wrote. Works for any token count, unlike the
-    reference probe.
-    """
-
-    try:
-        t = tensor.detach().float().abs()
-        per = t.reshape(t.shape[0], -1).mean(dim=1)
-        mid = per.shape[0] // 2
-        print(
-            f"[DSV4DBG] {tag} rows={per.shape[0]} "
-            f"zero_idx={(per == 0).nonzero().flatten()[:24].tolist()} "
-            f"nan_idx={(~torch.isfinite(per)).nonzero().flatten()[:24].tolist()} "
-            f"head={[round(float(x), 6) for x in per[:4]]} "
-            f"mid={[round(float(x), 6) for x in per[max(0, mid - 2) : mid + 2]]} "
-            f"tail={[round(float(x), 6) for x in per[-4:]]}",
-            flush=True,
-        )
-    except Exception as exc:  # never let the probe break a run
-        print(f"[DSV4DBG] {tag} row-abs failed: {type(exc).__name__} {exc}", flush=True)
-
-
-def _dbg_kv_rows(ori_kv, table, seqused) -> None:
-    """Per-row magnitudes of the unpacked KV the reference actually reads."""
-
-    try:
-        from sgl_kernel_npu.implementation.torch_native.attention.attention import (
-            unpack_kv,
-        )
-
-        kv = unpack_kv(ori_kv.detach())
-        page = ori_kv.shape[1]
-        length = int(seqused[0])
-        pos = torch.arange(length, device=table.device)
-        slots = table[0, pos // page].long() * page + pos % page
-        rows = kv[slots].float()
-        per = rows.abs().reshape(rows.shape[0], -1).mean(dim=1)
-        print(
-            f"[DSV4DBG] kv_rows slots={slots[:4].tolist()}..{slots[-2:].tolist()} "
-            f"zero_idx={(per == 0).nonzero().flatten()[:24].tolist()} "
-            f"nan_idx={(~torch.isfinite(per)).nonzero().flatten()[:24].tolist()} "
-            f"abs={[round(float(x), 6) for x in per[:12]]}",
-            flush=True,
-        )
-    except Exception as exc:  # never let the probe break a run
-        print(f"[DSV4DBG] kv_rows failed: {type(exc).__name__} {exc}", flush=True)
-
-
-_DBG_REF_ARMED = [False]
-
-
-def _dbg_ref_swa(layer, out, q, k, sink, window: int) -> None:
-    """Torch reference for the SWA path: causal + sliding window + sink.
-
-    Uses the unquantized bf16 K that was just written to the cache, so a finite
-    reference next to a NaN operator row proves the geometry is right and the
-    kernel is at fault.
-    """
-
-    try:
-        from sglang.srt.utils import get_bool_env_var
-
-        if not get_bool_env_var("SGLANG_DSV4_DBG_REF"):
-            return
-        if not _DBG_REF_ARMED[0]:
-            _DBG_REF_ARMED[0] = True
-            print("[DSV4DBG] ref probe armed", flush=True)
-        if k is None or q.shape[0] > 32 or out.shape[0] != q.shape[0]:
-            return
-        # The raw K only covers this batch's own tokens, so the reference is a
-        # full-sequence check only for a prefill-shaped batch.
-        T = q.shape[0]
-        if T < 2 or k.shape[0] != T:
-            return
-        qf = q.detach().float()
-        kf = k.detach().float()
-        if kf.dim() != 2:
-            print(f"[DSV4DBG] ref probe skipped, k={tuple(k.shape)}", flush=True)
-            return
-        scores = torch.einsum("qhd,kd->qhk", qf, kf) * layer.scaling
-        idx = torch.arange(T, device=q.device)
-        keep = (idx[None, :] <= idx[:, None]) & (idx[None, :] >= idx[:, None] - window)
-        scores = scores.masked_fill(~keep[:, None, :], float("-inf"))
-        m = scores.amax(dim=-1, keepdim=True)
-        p = torch.exp(scores - m)
-        denom = p.sum(dim=-1)
-        if sink is not None:
-            denom = denom + torch.exp(sink.detach().float() - m.squeeze(-1))
-        ref = torch.einsum("qhk,kd->qhd", p / denom.unsqueeze(-1), kf)
-        of = out.detach().float()
-        maxdiff = (of - ref).abs().amax(dim=(1, 2))
-        # Relative error is the scale-free check: fp8 KV quantization keeps it
-        # near 1e-2 for a correct row, while a wrong value layout pushes it to ~1.
-        reldiff = (of - ref).norm(dim=(1, 2)) / ref.norm(dim=(1, 2))
-        print(
-            f"[DSV4DBG] L{layer.layer_id}.ref "
-            f"T={T} H={q.shape[1]} D={q.shape[2]} window={window} "
-            f"k={tuple(k.shape)} k_bad={_dbg_nan_rows(kf)} "
-            f"ref_bad={_dbg_nan_rows(ref)} op_bad={_dbg_nan_rows(of)}",
-            flush=True,
-        )
-        print(
-            f"[DSV4DBG] L{layer.layer_id}.ref_err "
-            f"maxdiff={[round(float(x), 4) for x in maxdiff]} "
-            f"reldiff={[round(float(x), 4) for x in reldiff]}",
-            flush=True,
-        )
-        # A row that the operator never wrote shows up as exactly zero, which a
-        # real attention output cannot be, so this separates "wrong math" from
-        # "output rows left untouched".
-        print(
-            f"[DSV4DBG] L{layer.layer_id}.ref_abs "
-            f"op={[round(float(x), 6) for x in of.abs().mean(dim=(1, 2))]} "
-            f"ref={[round(float(x), 6) for x in ref.abs().mean(dim=(1, 2))]}",
-            flush=True,
-        )
-    except Exception as exc:  # never let the probe break a run
-        print(f"[DSV4DBG] ref probe failed: {type(exc).__name__} {exc}", flush=True)
-
-
 def _sparse_attn_kv_quant_kwargs() -> dict:
     """Extra kwargs the A5 kv-quant kernels need to interpret the KV layout."""
     if is_npu_arch35():
@@ -240,19 +63,6 @@ def _sparse_attn_kv_quant_kwargs() -> dict:
             "rope_head_dim": _NPU_ARCH35_KV_ROPE_HEAD_DIM,
         }
     return {}
-
-
-def _dbg_attn_impl() -> Optional[str]:
-    """Force one registered implementation of the sparse-attention operator.
-
-    ``mixed_quant_sparse_flash_mla`` dispatches through the SDK impl registry
-    (``auto`` by default), so pinning it is the only way to tell which
-    implementation produced a given output.
-    """
-
-    import os
-
-    return os.environ.get("SGLANG_DSV4_ATTN_IMPL") or None
 
 
 def _dspark_sparse_width(swa_window: int, block_size: int) -> int:
@@ -2417,11 +2227,6 @@ class DeepseekV4AscendAttnBackend(
             "layout_kv": "PA_BBND",
             **_seqused_q_kwargs(actual_seq_lengths_q_pa),
         }
-        meta_impl = _dbg_attn_impl()
-        if meta_impl is not None:
-            # The reference metadata is a Python object rather than the native
-            # byte blob, so a pinned impl has to cover both operators.
-            common["impl"] = meta_impl
         base_kwargs = {
             "batch_size": bs,
             "num_heads_q": self._dsv4_q_head_num,
@@ -2538,24 +2343,10 @@ class DeepseekV4AscendAttnBackend(
                 layer_id=layer.layer_id, swa_k=k, forward_batch=forward_batch
             )
         if compress_ratio == 0:
-            return self._forward_swa(q, layer, forward_batch, attn_sink, debug_k=k)
+            return self._forward_swa(q, layer, forward_batch, attn_sink)
         return self._forward_compressed(
             q, layer, forward_batch, attn_sink, compress_ratio
         )
-
-    def _dbg_ref_k(self, layer_id: int, candidate):
-        """The latent K actually written to the cache, for the reference probe.
-
-        ``forward`` receives ``q`` as a sentinel when the KV store already ran in
-        the model's prepare step, so only a 2-D candidate is the real latent.
-        """
-
-        if candidate is not None and candidate.dim() == 2:
-            return candidate
-        stored = getattr(self, "_dbg_stored_k", None)
-        if stored is not None and stored[0] == layer_id:
-            return stored[1]
-        return None
 
     def _forward_swa(
         self,
@@ -2563,7 +2354,6 @@ class DeepseekV4AscendAttnBackend(
         layer: RadixAttention,
         forward_batch: ForwardBatch,
         attn_sink: Optional[torch.Tensor],
-        debug_k: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         fm = self.forward_metadata
         pool = self.token_to_kv_pool
@@ -2591,72 +2381,13 @@ class DeepseekV4AscendAttnBackend(
             cmp_ratio=1,
         )
         attn_kwargs |= _seqused_q_kwargs(fm.actual_seq_lengths_q_pa)
-        attn_impl = _dbg_attn_impl()
-        if attn_impl is not None:
-            attn_kwargs["impl"] = attn_impl
-            print(
-                f"[DSV4DBG] L{layer.layer_id}.impl forced={attn_impl}", flush=True
-            )
         ori_sparse_indices = fm.ori_sparse_indices
         if ori_sparse_indices is not None:
             attn_kwargs["ori_sparse_indices"] = ori_sparse_indices
             attn_kwargs["ori_topk_length"] = fm.ori_topk_length
         _, attn_op = _sparse_attn_ops()
         q_arg = attn_kwargs.pop("q")
-        if layer.layer_id < 2:
-            _dbg_swa_io(layer.layer_id, "q", q_arg)
-            _dbg_swa_io(layer.layer_id, "page_table", fm.swa_page_table)
-            _dbg_swa_io(layer.layer_id, "seqused_kv", fm.actual_seq_lengths_kv)
-            if attn_sink is not None:
-                _dbg_swa_io(layer.layer_id, "sink", attn_sink)
-            cu_q = fm.actual_seq_lengths_q_pa
-            seqused_q = attn_kwargs.get("seqused_q")
-            print(
-                f"[DSV4DBG] L{layer.layer_id}.qmeta "
-                f"T={tuple(q_arg.shape)} "
-                f"cu_q={None if cu_q is None else cu_q.tolist()} "
-                f"seqused_q={None if seqused_q is None else seqused_q.tolist()} "
-                f"seqused_kv={attn_kwargs.get('seqused_ori_kv').tolist()}",
-                flush=True,
-            )
         out, _ = attn_op(q_arg, **attn_kwargs)
-        if layer.layer_id < 2:
-            from sglang.srt.utils import get_bool_env_var
-
-            if get_bool_env_var("SGLANG_DSV4_DBG_REPEAT"):
-                # Same inputs, second call: if the NaN rows move, the operator is
-                # leaving output rows unwritten instead of computing NaN.
-                out2, _ = attn_op(q_arg, **attn_kwargs)
-                match = torch.equal(
-                    torch.isnan(out.float()), torch.isnan(out2.float())
-                )
-                print(
-                    f"[DSV4DBG] L{layer.layer_id}.repeat_nan_match {match} "
-                    f"first={_dbg_nan_rows(out)} second={_dbg_nan_rows(out2)}",
-                    flush=True,
-                )
-            _dbg_swa_io(layer.layer_id, "swa_out", out)
-            _dbg_token_nan(layer.layer_id, "swa_out", out)
-            _dbg_token_nan(layer.layer_id, "swa_q", q_arg)
-            _dbg_row_abs(f"L{layer.layer_id}.out_abs", out)
-            _dbg_row_abs(f"L{layer.layer_id}.q_abs", q_arg)
-            _dbg_kv_rows(ori_kv, fm.swa_page_table, fm.actual_seq_lengths_kv)
-            _dbg_ref_swa(
-                layer,
-                out,
-                q_arg,
-                self._dbg_ref_k(layer.layer_id, debug_k),
-                attn_sink,
-                window=int(fm.ori_win_left),
-            )
-            print(
-                f"[DSV4DBG] L{layer.layer_id}.mask "
-                f"ori_win_left={fm.ori_win_left} ori_win_right={fm.ori_win_right} "
-                f"ori_mask_mode={fm.ori_mask_mode} sinks={'None' if attn_sink is None else tuple(attn_sink.shape)} "
-                f"positions={forward_batch.positions[:16].tolist()} "
-                f"scaling={layer.scaling}",
-                flush=True,
-            )
         return out
 
     def _forward_compressed(
@@ -2766,9 +2497,6 @@ class DeepseekV4AscendAttnBackend(
             loc=swa_loc,
             cache=swa_k,
         )
-        if layer_id < 2:
-            _dbg_kv_write(pool, layer_id, swa_k, swa_loc)
-            self._dbg_stored_k = (layer_id, swa_k)
 
     def _build_npu_compress_metadata_verify(self, forward_batch: ForwardBatch) -> None:
         fm = self.forward_metadata

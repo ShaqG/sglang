@@ -15,6 +15,7 @@ There is no paged state allocator or ``cache_mode=1`` compatibility storage.
 
 from __future__ import annotations
 
+import os
 from typing import List, Optional, Tuple
 
 import torch
@@ -605,10 +606,16 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
             )
         if cache_2d.shape[0] == 0:
             return
+        # The CANN 9.2 released writer (cann_ops_transformers_cann920) drops rows
+        # when a partial page is written at a non-zero page offset, which
+        # corrupts the cache and makes the model emit only BOS. Until that
+        # kernel is fixed, SGLANG_DSV4_KVWRITE_IMPL=torch_native selects the
+        # (slow but correct) reference writer.
         kv_compress_epilog(
             buf,
             cache_2d,
             slot_mapping,
+            impl=os.environ.get("SGLANG_DSV4_KVWRITE_IMPL", "auto"),
         )
 
     def set_swa_key_buffer_radix_fused_norm_rope(

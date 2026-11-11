@@ -38,6 +38,26 @@ from sglang.srt.mem_cache.deepseek_v4_memory_pool import (
 from sglang.srt.runtime_context import get_schedule
 
 
+def _dbg_after_write(tag: str, buf: torch.Tensor, loc: torch.Tensor) -> None:
+    """Read the written rows back so a partial KV store is visible immediately."""
+
+    try:
+        from sglang.srt.hardware_backend.npu.attention.ascend_dsv4_backend import (
+            _dbg_row_abs,
+        )
+
+        rows = buf.view(torch.uint8).reshape(-1, buf.shape[-1])[loc]
+        print(
+            f"[DSV4DBG] {tag} buf={tuple(buf.shape)}/{buf.dtype} "
+            f"stride={tuple(buf.stride())} loc_dtype={loc.dtype} "
+            f"neg={int((loc < 0).sum())} loc={loc[:12].tolist()}",
+            flush=True,
+        )
+        _dbg_row_abs(f"{tag}.rows", rows)
+    except Exception as exc:  # never let the probe break a run
+        print(f"[DSV4DBG] {tag} failed: {type(exc).__name__} {exc}", flush=True)
+
+
 class NPUDeepSeekV4SingleKVPool(DeepSeekV4SingleKVPool):
     """NPU PA_ND variant of the full / SWA / c4 / c128 single-KV pool.
 
@@ -575,6 +595,8 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
         buf = self.swa_kv_pool.kv_buffer[self._swa_local_layer_id(layer_id)]
         if is_npu_arch35():
             self._write_arch35_packed_kv(buf=buf, loc=loc, cache=cache)
+            if layer_id < 2:
+                _dbg_after_write(f"L{layer_id}.write", buf, loc)
             return
         buf_flat = buf.flatten(0, 1)  # (num_pages * page_size, 1, dim)
         # Caller (V4 MQALayer) may hand us cache shaped (T, dim); the buffer has
@@ -655,6 +677,12 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
         )
 
         safe_swa_loc = swa_loc.clamp_min(0).to(torch.int64)
+        if layer_id < 2:
+            print(
+                f"[DSV4DBG] L{layer_id}.fused_loc raw_dtype={swa_loc.dtype} "
+                f"neg={int((swa_loc < 0).sum())} loc={swa_loc[:12].tolist()}",
+                flush=True,
+            )
         self.set_swa_buffer(
             layer_id,
             safe_swa_loc,

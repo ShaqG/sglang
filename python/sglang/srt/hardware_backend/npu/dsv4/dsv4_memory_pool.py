@@ -606,16 +606,16 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
             )
         if cache_2d.shape[0] == 0:
             return
-        # The CANN 9.2 released writer (cann_ops_transformers_cann920) drops rows
-        # when a partial page is written at a non-zero page offset, which
-        # corrupts the cache and makes the model emit only BOS. Until that
-        # kernel is fixed, SGLANG_DSV4_KVWRITE_IMPL=torch_native selects the
-        # (slow but correct) reference writer.
+        # Temporary: the CANN 9.2 released writer (cann_ops_transformers_cann920)
+        # corrupts the cache when a partial page is written at a non-zero page
+        # offset, which makes the model emit only BOS. Default to the reference
+        # writer until that kernel is fixed; set SGLANG_DSV4_KVWRITE_IMPL=auto
+        # to restore the kernel path for performance work.
         kv_compress_epilog(
             buf,
             cache_2d,
             slot_mapping,
-            impl=os.environ.get("SGLANG_DSV4_KVWRITE_IMPL", "auto"),
+            impl=os.environ.get("SGLANG_DSV4_KVWRITE_IMPL", "torch_native"),
         )
 
     def set_swa_key_buffer_radix_fused_norm_rope(

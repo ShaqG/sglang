@@ -724,7 +724,18 @@ class FutureMap:
                 f"elapsed={time.monotonic() - wait_started:.6f}s",
                 flush=True,
             )
+            print(
+                f"{debug_prefix} stage=before_seq_lens_gather "
+                f"device={self.new_seq_lens_buf.device} fi_shape={tuple(fi.shape)}",
+                flush=True,
+            )
         batch.seq_lens = self.new_seq_lens_buf[fi]
+        if _MTP_OVERLAP_DEBUG:
+            print(
+                f"{debug_prefix} stage=after_seq_lens_gather "
+                f"shape={tuple(batch.seq_lens.shape)}",
+                flush=True,
+            )
 
         if not self.needs_cpu_seq_lens:
             # GPU gather above is kept (SB.seq_lens must advance each verify);
@@ -741,15 +752,16 @@ class FutureMap:
         if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
             if _MTP_OVERLAP_DEBUG:
                 print(
-                    f"{debug_prefix} stage=before_seq_lens_cpu "
-                    f"device={batch.seq_lens.device} shape={tuple(batch.seq_lens.shape)}",
+                    f"{debug_prefix} stage=before_npu_to_cpu "
+                    f"device={batch.seq_lens.device} shape={tuple(batch.seq_lens.shape)} "
+                    f"dtype={batch.seq_lens.dtype}",
                     flush=True,
                 )
                 copy_started = time.monotonic()
             batch.seq_lens_cpu = batch.seq_lens.cpu()  # bootstrap / non-CUDA
             if _MTP_OVERLAP_DEBUG:
                 print(
-                    f"{debug_prefix} stage=after_seq_lens_cpu "
+                    f"{debug_prefix} stage=after_npu_to_cpu "
                     f"elapsed={time.monotonic() - copy_started:.6f}s",
                     flush=True,
                 )

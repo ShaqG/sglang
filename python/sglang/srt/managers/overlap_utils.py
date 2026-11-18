@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 
@@ -67,6 +69,7 @@ def decide_needs_confidence_relay() -> bool:
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _is_npu = is_npu()
+_MTP_OVERLAP_DEBUG = _is_npu and os.getenv("SGLANG_MTP_OVERLAP_DEBUG") == "1"
 
 # Token-buf consume tracking: init to -1, assert non-negative on gather,
 # write -1 back. Catches "gather without intermediate stash" bugs. CI enables
@@ -692,6 +695,16 @@ class FutureMap:
         fi = draft_input.future_indices
         if fi is None:
             return
+        if _MTP_OVERLAP_DEBUG:
+            debug_prefix = f"[MTP_OVERLAP_DEBUG] pid={os.getpid()}"
+            wait_started = time.monotonic()
+            print(
+                f"{debug_prefix} stage=before_event_wait "
+                f"event={self.publish_ready is not None} "
+                f"stream={self.fwd_prepare_d2h_stream is not None} "
+                f"stream_ordered={stream_ordered}",
+                flush=True,
+            )
         if self.publish_ready is not None and stream_ordered:
             self._publish_fresh = False
         elif self.publish_ready is not None:
@@ -705,6 +718,12 @@ class FutureMap:
                 self.publish_ready.synchronize()
             else:
                 self.publish_ready.wait()
+        if _MTP_OVERLAP_DEBUG:
+            print(
+                f"{debug_prefix} stage=after_event_wait "
+                f"elapsed={time.monotonic() - wait_started:.6f}s",
+                flush=True,
+            )
         batch.seq_lens = self.new_seq_lens_buf[fi]
 
         if not self.needs_cpu_seq_lens:
@@ -720,7 +739,20 @@ class FutureMap:
             return
 
         if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
+            if _MTP_OVERLAP_DEBUG:
+                print(
+                    f"{debug_prefix} stage=before_seq_lens_cpu "
+                    f"device={batch.seq_lens.device} shape={tuple(batch.seq_lens.shape)}",
+                    flush=True,
+                )
+                copy_started = time.monotonic()
             batch.seq_lens_cpu = batch.seq_lens.cpu()  # bootstrap / non-CUDA
+            if _MTP_OVERLAP_DEBUG:
+                print(
+                    f"{debug_prefix} stage=after_seq_lens_cpu "
+                    f"elapsed={time.monotonic() - copy_started:.6f}s",
+                    flush=True,
+                )
             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
             if _DEBUG_ASSERT:
                 _assert_nonneg_and_invalidate(batch.seq_lens, self.new_seq_lens_buf, fi)

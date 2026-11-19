@@ -1331,6 +1331,10 @@ class Envs:
     SGLANG_ZBAL_BOOTSTRAP_URL = EnvStr("")
     # Set to 0 to allow AscendAttnBackend to set needs_cpu_seq_lens to False for dsa models.
     SGLANG_NPU_ATTN_BACKEND_NEEDS_CPU_SEQ_LENS = EnvBool(True)
+    # A/B knob for the ascend_ops fused_op (MegaMoE) dispatch: prepend one extra
+    # all-reduce on the MoE input over the EP group. Requires equal rows on every
+    # rank (DP-attention padded batches / graph replay). Not for production.
+    SGLANG_NPU_MEGA_MOE_PRE_ALLREDUCE = EnvBool(False)
 
     # ===================================================================
     # MUSA

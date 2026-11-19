@@ -301,6 +301,12 @@ class AscendOpsDispatcher(BaseDispatcher):
                 f"ascend_ops fused_op {phase} received up to {max_rows} tokens "
                 f"per rank, exceeding the MegaMoE capacity of {capacity}"
             )
+        if envs.SGLANG_NPU_MEGA_MOE_PRE_ALLREDUCE.get():
+            # A/B knob: `hidden_states` is handed to MegaMoE unchanged, so an
+            # extra EP all-reduce here measures what one added collective on this
+            # path costs. Clone first: the caller may still hold this tensor.
+            hidden_states = hidden_states.contiguous().clone()
+            dist.all_reduce(hidden_states, group=self.ep_group)
         return AscendOpsDispatchOutput(
             hidden_states=hidden_states,
             hidden_states_scale=None,

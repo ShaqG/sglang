@@ -752,6 +752,19 @@ class FutureMap:
         if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
             if _MTP_OVERLAP_DEBUG:
                 print(
+                    f"{debug_prefix} stage=before_npu_synchronize "
+                    f"device={batch.seq_lens.device}",
+                    flush=True,
+                )
+                sync_started = time.monotonic()
+                # Diagnostic synchronization changes the overlap execution timing.
+                torch.npu.synchronize(batch.seq_lens.device)
+                print(
+                    f"{debug_prefix} stage=after_npu_synchronize "
+                    f"elapsed={time.monotonic() - sync_started:.6f}s",
+                    flush=True,
+                )
+                print(
                     f"{debug_prefix} stage=before_npu_to_cpu "
                     f"device={batch.seq_lens.device} shape={tuple(batch.seq_lens.shape)} "
                     f"dtype={batch.seq_lens.dtype}",

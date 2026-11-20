@@ -722,6 +722,8 @@ class ForwardFlags:
         # ForwardBatch.attn_tp_sequence_sharded decision, stamped by the model
         # that slices); read by the benchmark routing override.
         "attn_tp_sequence_sharded": False,
+        # Number of attention-TP slices per DP shard at the MoE input.
+        "moe_attn_tp_row_splits": 1,
         # Physical token rows in TP rank order for the current Ascend MoE call.
         "ascend_allgather_row_sizes": None,
     }
@@ -741,6 +743,7 @@ class ForwardFlags:
             "lora_batch_layout",
             "sp_active",
             "attn_tp_sequence_sharded",
+            "moe_attn_tp_row_splits",
         }
     )
 

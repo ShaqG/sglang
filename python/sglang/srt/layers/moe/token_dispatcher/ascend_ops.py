@@ -45,7 +45,7 @@ from sglang.srt.runtime_context import (
     get_schedule,
     max_prefill_buffer_tokens,
 )
-from sglang.srt.utils import is_npu
+from sglang.srt.utils import ceil_div, is_npu
 
 if is_npu():
     import torch_npu
@@ -292,9 +292,15 @@ class AscendOpsDispatcher(BaseDispatcher):
         capacity = (
             self._fused_prefill_capacity if is_prefill else self._fused_decode_capacity
         )
-        num_tokens = hidden_states.shape[0]
+        max_rows = hidden_states.shape[0]
         dp_rows = get_dp_global_num_tokens() if is_dp_attention_enabled() else None
-        max_rows = max(num_tokens, max(dp_rows or (), default=0))
+        if dp_rows:
+            # DP metadata counts rows before the MoE transport's tensor_split.
+            # Use the largest slice across DP shards so peers agree on overflow.
+            max_dp_rank_rows = ceil_div(
+                max(dp_rows), get_forward().moe_attn_tp_row_splits
+            )
+            max_rows = max(max_rows, max_dp_rank_rows)
         if max_rows > capacity:
             phase = "prefill" if is_prefill else "decode"
             raise ValueError(

@@ -302,9 +302,14 @@ class MoeRowTransport(ComputeTransport):
             row_layout = get_forward().scoped(
                 ascend_allgather_row_sizes=self._ascend_allgather_row_sizes()
             )
+        attn_tp_row_splits = (
+            get_parallel().attn_tp_size if self._use_tp_attn_a2a_scatter else 1
+        )
         with (
             get_forward().scoped(
-                mlp_reduce_scatter=self.mlp_reduce_scatter, defer_moe_finalize=False
+                mlp_reduce_scatter=self.mlp_reduce_scatter,
+                defer_moe_finalize=False,
+                moe_attn_tp_row_splits=attn_tp_row_splits,
             ),
             self.gathered_rows,
             row_layout,

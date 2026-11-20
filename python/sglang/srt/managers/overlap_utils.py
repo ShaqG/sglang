@@ -373,6 +373,7 @@ class FutureMap:
         self.accept_lens_buf: Optional[torch.Tensor] = None
 
         self.publish_ready = None  # lazy device.Event(); only spec_v2 needs it
+        self._debug_forward_done = None
         # Debug consume-once state: armed by a recording publish, consumed by
         # resolve; arm/consume strictly alternate across all batch interleavings.
         self._publish_fresh = False
@@ -682,6 +683,19 @@ class FutureMap:
             int(x) for x in fresh_cpu.tolist()
         ]
 
+    def _sync_debug_seq_lens_fence(self, debug_prefix: str, stage: str) -> None:
+        # Record on the current stream so only work up to this marker is covered.
+        fence = torch.get_device_module(self.device).Event()
+        fence.record()
+        print(f"{debug_prefix} stage=before_{stage}_fence_sync", flush=True)
+        started = time.monotonic()
+        fence.synchronize()
+        print(
+            f"{debug_prefix} stage=after_{stage}_fence_sync "
+            f"elapsed={time.monotonic() - started:.6f}s",
+            flush=True,
+        )
+
     def resolve_seq_lens_cpu(
         self, batch: ScheduleBatch, stream_ordered: bool = False
     ) -> None:
@@ -697,7 +711,6 @@ class FutureMap:
             return
         if _MTP_OVERLAP_DEBUG:
             debug_prefix = f"[MTP_OVERLAP_DEBUG] pid={os.getpid()}"
-            wait_started = time.monotonic()
             print(
                 f"{debug_prefix} stage=before_event_wait "
                 f"event={self.publish_ready is not None} "
@@ -705,6 +718,20 @@ class FutureMap:
                 f"stream_ordered={stream_ordered}",
                 flush=True,
             )
+            forward_done = (
+                self._debug_forward_done.query()
+                if self._debug_forward_done is not None
+                else None
+            )
+            publish_done = (
+                self.publish_ready.query() if self.publish_ready is not None else None
+            )
+            print(
+                f"{debug_prefix} stage=event_state "
+                f"forward_done={forward_done} publish_done={publish_done}",
+                flush=True,
+            )
+            wait_started = time.monotonic()
         if self.publish_ready is not None and stream_ordered:
             self._publish_fresh = False
         elif self.publish_ready is not None:
@@ -724,6 +751,8 @@ class FutureMap:
                 f"elapsed={time.monotonic() - wait_started:.6f}s",
                 flush=True,
             )
+            if self.needs_cpu_seq_lens:
+                self._sync_debug_seq_lens_fence(debug_prefix, "wait")
             print(
                 f"{debug_prefix} stage=before_seq_lens_gather "
                 f"device={self.new_seq_lens_buf.device} fi_shape={tuple(fi.shape)}",
@@ -751,19 +780,7 @@ class FutureMap:
 
         if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
             if _MTP_OVERLAP_DEBUG:
-                print(
-                    f"{debug_prefix} stage=before_npu_synchronize "
-                    f"device={batch.seq_lens.device}",
-                    flush=True,
-                )
-                sync_started = time.monotonic()
-                # Diagnostic synchronization changes the overlap execution timing.
-                torch.npu.synchronize(batch.seq_lens.device)
-                print(
-                    f"{debug_prefix} stage=after_npu_synchronize "
-                    f"elapsed={time.monotonic() - sync_started:.6f}s",
-                    flush=True,
-                )
+                self._sync_debug_seq_lens_fence(debug_prefix, "gather")
                 print(
                     f"{debug_prefix} stage=before_npu_to_cpu "
                     f"device={batch.seq_lens.device} shape={tuple(batch.seq_lens.shape)} "
@@ -807,6 +824,11 @@ class FutureMap:
         indices = future_indices
         if indices.shape[0] == 0:
             return  # DP idle
+        if _MTP_OVERLAP_DEBUG and self.spec_algo.is_some():
+            if self._debug_forward_done is None:
+                self._debug_forward_done = torch.get_device_module(self.device).Event()
+            # In spec overlap the worker publishes between verify and draft extend.
+            self._debug_forward_done.record()
         relay = self._relay
         if relay is not None and new_seq_lens is relay.published_seq_lens:
             relay.published_seq_lens = None

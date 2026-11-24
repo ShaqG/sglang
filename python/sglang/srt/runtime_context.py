@@ -520,6 +520,17 @@ def is_scheduler_io_rank() -> bool:
     )
 
 
+def is_control_broadcast_local() -> bool:
+    """Whether each attention-DP group leader receives control requests from
+    the DP controller and broadcasts them within its group, instead of the
+    first leader broadcasting them over the whole TP group."""
+    parallel = get_parallel()
+    return parallel.attn_dp_enabled and (
+        parallel.enable_dp_attention_local_control_broadcast
+        or get_exec().moe.is_ep_scale_joiner
+    )
+
+
 class _FlagGroupBase(msgspec.Struct):
     """Shared flag-group behavior: typo-safe writes + transactional ``override()``.
 
@@ -726,6 +737,13 @@ class ForwardFlags:
         "moe_attn_tp_row_splits": 1,
         # Physical token rows in TP rank order for the current Ascend MoE call.
         "ascend_allgather_row_sizes": None,
+        # The batch of the current model forward, published by ModelRunner so
+        # the EP dispatcher can derive an Ascend allgather row layout lazily.
+        "forward_batch": None,
+        # Whether the FFN stage's MoE input is a contiguous attention-TP slice
+        # of the DP shard (True) or the gathered full shard on every rank
+        # (False). None means the stage did not declare it.
+        "moe_input_attn_tp_sliced": None,
     }
 
     # Read/written inside compiled graphs (vocab embedding, layer boundaries,

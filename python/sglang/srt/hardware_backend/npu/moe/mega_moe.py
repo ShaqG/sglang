@@ -85,18 +85,25 @@ def destroy_mega_moe_buffers() -> None:
             del buffers[key]
 
 
-def prepare_mega_moe_arch22_weights(layer, prefix, weight, *, packed_int4=False) -> None:
-    """Build per-expert NZ tensors for arch22 alongside the grouped matmul weights."""
+def prepare_mega_moe_arch22_weights(
+        layer, prefix, weight, *, packed_int4=False
+) -> bool:
+    """Build per-expert NZ tensors for arch22.
+
+    Returns True when the per-expert list is the canonical storage, i.e. the
+    caller must release the stacked grouped-matmul weight. Returns False when
+    the fused op is inactive (or on arch35), so the stacked weight stays.
+    """
     config = getattr(getattr(layer, "dispatcher", None), "moe_ascend_ops_config", None)
     if config is None or not config.uses_fused_op:
-        return
+        return False
 
     import torch_npu
 
     from sglang.srt.hardware_backend.npu.utils import NPUACLFormat, is_npu_arch35
 
     if is_npu_arch35():
-        return
+        return False
 
     # Slice the original ND tensor before the grouped matmul path casts the
     # entire stack to NZ. Each expert needs its own NZ storage descriptor.
@@ -115,6 +122,19 @@ def prepare_mega_moe_arch22_weights(layer, prefix, weight, *, packed_int4=False)
     else:
         for dest, source in zip(previous, experts, strict=True):
             dest.copy_(source)
+    return True
+
+
+def release_mega_moe_stacked_weight(layer, prefix) -> None:
+    """Free the stacked weight once the fused op owns the per-expert list.
+
+    The fused op consumes ``_mega_moe_{prefix}_weights`` directly, so the
+    grouped-matmul copy is dead when ``fused_op`` is enabled.
+    """
+    weight = getattr(layer, f"{prefix}_weight", None)
+    if weight is None:
+        return
+    weight.data = torch.empty(0, dtype=weight.dtype, device=weight.device)
 
 
 def _arch22_expert_args(layer, prefix, int4, quantized):
@@ -179,7 +199,10 @@ def _activation_args(config):
         return {
             "activation": "swigluoai",
             "activation_clamp": clamp,
-            "activation_params": {"alpha": 1.702 if alpha is None else alpha, "beta": 1.0},
+            "activation_params": {
+                "alpha": 1.702 if alpha is None else alpha,
+                "beta": 1.0,
+            },
         }
     if config.activation != "silu":
         raise ValueError(f"Unsupported MegaMoE activation {config.activation!r}")

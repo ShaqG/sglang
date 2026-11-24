@@ -1,7 +1,10 @@
 """ModelSlim name resolution and weight dtypes, using small CPU layers."""
 
+import json
 import unittest
 from copy import copy, deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -347,6 +350,43 @@ class TestModelSlimMapping(CustomTestCase):
             ValueError, "Unsupported ModelSlim Linear scheme.*W16A16S"
         ):
             self.make_linear(config, "model.unsupported")
+
+    def test_loader_maps_native_dsv4_description_without_hc_head(self):
+        from sglang.srt.configs.load_config import LoadConfig
+        from sglang.srt.layers.quantization.modelslim.schemes import (
+            ModelSlimW4A8Int8MoE,
+        )
+        from sglang.srt.model_loader.weight_utils import get_quant_config
+
+        raw_prefix = "layers.0.ffn.experts.0"
+        description = {
+            f"{raw_prefix}.{projection}.{field}": "W4A8_DYNAMIC"
+            for projection in ("w1", "w2", "w3")
+            for field in ("weight", "weight_scale", "weight_offset", "scale_bias")
+        }
+        with TemporaryDirectory() as model_path:
+            (Path(model_path) / "quant_model_description.json").write_text(
+                json.dumps(description), encoding="utf-8"
+            )
+            model_config = SimpleNamespace(
+                model_path=model_path,
+                quantization="modelslim",
+                hf_config={
+                    "architectures": ["DeepseekV4ForCausalLM"],
+                    "quantization_config": None,
+                },
+                is_draft_model=False,
+            )
+            config = get_quant_config(model_config, LoadConfig(), {})
+
+        prefix = "model.layers.0.mlp.experts"
+        w13, w2 = config.get_moe_scheme(None, prefix)
+        self.assertIsInstance(w13, ModelSlimW4A8Int8MoE)
+        self.assertIsInstance(w2, ModelSlimW4A8Int8MoE)
+        self.assertEqual(
+            config.quant_description[f"{prefix}.0.down_proj.scale_bias"],
+            "W4A8_DYNAMIC",
+        )
 
     def test_loader_keeps_model_mapping_clean_and_applies_draft_mapper(self):
         """Map layers.45 -> decoder in the real loader; leave model rules alone."""

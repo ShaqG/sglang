@@ -241,6 +241,30 @@ class TestPoolFactory(unittest.TestCase):
     generation from the compression ratios.
     """
 
+    def test_packed_kv_buffers_zero_bytes_and_preserve_layout_dtype(self):
+        for layout, dtype, row_bytes in (
+            (NPUDSV4KVLayout.V41_SWA_FP8, torch.float8_e4m3fn, 544),
+            (NPUDSV4KVLayout.V41_CMP_FP4, torch.uint8, 320),
+        ):
+            with self.subTest(layout=layout):
+                pool = SimpleNamespace(
+                    layout=layout,
+                    kernel_page_size=128,
+                    size=256,
+                    qk_nope_head_dim=448,
+                    qk_rope_head_dim=64,
+                    device="cpu",
+                )
+                with patch.object(torch, "zeros", wraps=torch.zeros) as zeros:
+                    buffer = DSV41NPUSingleKVPool.create_buffer(pool, num_pages=3)
+                zeros.assert_called_once_with(
+                    3, 128, 1, row_bytes, dtype=torch.uint8, device="cpu"
+                )
+                self.assertEqual(buffer.dtype, dtype)
+                self.assertEqual(buffer.shape, (3, 128, 1, row_bytes))
+                self.assertEqual(pool.bytes_per_page_padded, 128 * row_bytes)
+                self.assertEqual(torch.count_nonzero(buffer.view(torch.uint8)).item(), 0)
+
     def _make(self, *, page_size, global_page_size, kv_layout):
         calls = {}
 

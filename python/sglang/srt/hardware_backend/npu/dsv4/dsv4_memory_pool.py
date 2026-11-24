@@ -146,14 +146,16 @@ class DSV41NPUSingleKVPool(NPUDeepSeekV4SingleKVPool):
         # The HiCache assembler uses bytes_per_page_padded as host item_bytes.
         self.bytes_per_page_padded = self.kernel_page_size * kv_dim * kv_dtype.itemsize
         npu_num_pages = (self.size + self.kernel_page_size + 1) // self.kernel_page_size
+        # Both packed layouts use one-byte elements. Zero the underlying bytes
+        # so allocation does not require aclnnInplaceZero to support FP8.
         return torch.zeros(
             npu_num_pages,
             self.kernel_page_size,
             1,
             kv_dim,
-            dtype=kv_dtype,
+            dtype=torch.uint8,
             device=self.device,
-        )
+        ).view(kv_dtype)
 
 
 class NPUCompressStatePool(CompressStatePool):

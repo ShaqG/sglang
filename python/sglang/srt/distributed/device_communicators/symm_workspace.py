@@ -468,6 +468,9 @@ def _device_has_multicast(device: torch.device) -> bool:
 
 def is_symm_workspace_supported(group: ProcessGroup, device: torch.device) -> bool:
     """Whether the push/pull kernels can run over this group (collective, cached)."""
+    # PyTorch uses the CUDA device type on ROCm as well.
+    if device.type != "cuda":
+        return False
     name = group.group_name
     if name not in _SUPPORTED:
         from .custom_all_reduce_v2 import can_use_custom_all_reduce_v2

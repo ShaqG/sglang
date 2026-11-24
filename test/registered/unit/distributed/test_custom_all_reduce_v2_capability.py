@@ -1,4 +1,5 @@
 import logging
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -8,10 +9,32 @@ from sglang.srt.distributed.device_communicators import (
     custom_all_reduce_v2,
     dpx_hier_all_reduce,
     quick_all_reduce,
+    vocab_gather,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=6, suite="base-a-test-cpu")
+
+
+def test_npu_vocab_gather_skips_cuda_workspace_probe(monkeypatch):
+    probe = Mock(side_effect=AssertionError("NPU must not probe CUDA topology"))
+    monkeypatch.setattr(custom_all_reduce_v2, "can_use_custom_all_reduce_v2", probe)
+    group = SimpleNamespace(
+        world_size=2,
+        device=SimpleNamespace(type="npu"),
+        cpu_group=SimpleNamespace(group_name="npu_tp"),
+        all_gather=Mock(),
+    )
+
+    gather = vocab_gather.make_vocab_gather(group, local_width=128, symm_rows=0)
+
+    probe.assert_not_called()
+    local = object()
+    assert gather(local) is group.all_gather.return_value
+    group.all_gather.assert_called_once_with(local, dim=-1)
+    group.all_gather.reset_mock()
+    assert gather.gather_stacked(local) is group.all_gather.return_value
+    group.all_gather.assert_called_once_with(local, dim=0)
 
 
 def _patch_group(monkeypatch, *, world_size, same_node):

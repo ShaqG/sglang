@@ -55,6 +55,7 @@ from sglang.srt.model_executor.runner_utils.prefill_graph import (
     is_in_prefill_graph_scope,
 )
 from sglang.srt.models.deepseek_v2 import MoEOutput
+from sglang.srt.hardware_backend.npu.utils import is_npu_arch35
 from sglang.srt.runtime_context import get_forward, get_parallel, get_platform
 from sglang.srt.utils import is_gfx95_supported, is_hip, is_npu, is_xpu
 

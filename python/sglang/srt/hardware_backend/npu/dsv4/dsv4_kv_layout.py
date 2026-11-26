@@ -38,7 +38,7 @@ class NPUDSV4KVLayout(str, enum.Enum):
 
     @property
     def quant_group(self) -> int:
-        """Values sharing one quant scale; None = not used by this row."""
+        """Values sharing one quant scale; None rows are written unquantized."""
         return {
             NPUDSV4KVLayout.V4_BF16: None,
             NPUDSV4KVLayout.V41_BF16: None,

@@ -134,6 +134,27 @@ def _ds41_ops():
     )
 
 
+def _ensure_dsv41_static_verify_mode() -> None:
+    """Require fixed-width low-ratio verification on both NPU generations.
+
+    The low-ratio verify metadata pipeline assumes the STATIC request-major
+    rectangle (``bs * (num_draft_tokens + 1)`` rows of contiguous positions
+    per request), which COMPACT's ragged variable-length layout breaks.
+    CAP_ACCEPT only changes the accept-length accounting, so it rides the
+    STATIC execution path for free.  Failing at startup -- instead of at the
+    first verify step -- keeps the misconfiguration visible before any
+    compressed state is written.
+    """
+    if read_ragged_verify_mode() is not RaggedVerifyMode.COMPACT:
+        return
+    raise RuntimeError(
+        "DeepSeek-V4.1 on NPU does not support "
+        "SGLANG_RAGGED_VERIFY_MODE=compact: the low-ratio verify metadata "
+        "requires the STATIC request-major verify layout. Unset "
+        "SGLANG_RAGGED_VERIFY_MODE (or set it to 'static' or 'cap-accept')."
+    )
+
+
 @functools.cache
 def _dsv41_a3_ops():
     """Use the paired BF16 A3 operators bundled by sgl-kernel-npu."""
@@ -417,12 +438,23 @@ class CompressorAscendBackendMixin:
             # too and returns immediately.
             self._build_low_ratio_compress_metadata(forward_batch)
 
-    def _build_npu_compress_metadata_prefill(self, forward_batch: ForwardBatch) -> None:
-        # eager-only: prefill is never graph-captured, host reads (cu_cpu) are safe here
+    def _build_seq_metadata_decode(self, seq_lens: torch.Tensor) -> None:
+        """``start_pos``/``seqused`` for eager decode; the shared seq scalars
+        both generations' compressors consume (last live position, live flag).
+        """
+        fm = self.forward_metadata
+        fm.start_pos = torch.clamp(seq_lens - 1, min=0).to(torch.int32)
+        fm.seqused = (seq_lens > 0).to(torch.int32)
+
+    def _build_seq_metadata_prefill(self, forward_batch: ForwardBatch):
+        """``start_pos``/``seqused``/``dsv4_max_input_capacity`` for eager
+        prefill; the shared seq scalars both generations' compressors consume.
+
+        Returns ``(cu_cpu, prefix_cpu)`` for the V4 ratio-block builders that
+        need the same host mirrors.
+        """
         fm = self.forward_metadata
         device = forward_batch.seq_lens.device
-        positions = forward_batch.positions
-        t = positions.shape[0]
         bs = forward_batch.batch_size
         cu_cpu, prefix_cpu = self._build_seq_metadata_prefill(forward_batch)
         ratio_lists: dict = {
@@ -1286,17 +1318,23 @@ class C4IndexerAscendBackendMixin:
 class LowRatioCompressAscendBackendMixin:
     """NPU implementation of the DeepSeek-V4.1 low-ratio (1 / 2) source path.
 
-    Mirrors ``DeepseekV4AttnBackend.forward_low_ratio_sources`` but keeps its own
-    orchestration: ``deepseek_v4_backend`` imports Triton kernels at module scope,
-    and the two generations differ in kernels and cache row formats. The
-    context-parallel and prefill-graph branches are CUDA-only.
+    Mirrors ``DeepseekV4AttnBackend.forward_low_ratio_sources`` but keeps its
+    own orchestration: ``deepseek_v4_backend`` imports Triton kernels at module
+    scope, and the two generations differ in kernels and cache row formats.
+    The context-parallel and prefill-graph branches of the CUDA source are not
+    modeled on NPU.
 
-    Unlike CUDA, the compress step hands its pre-RoPE ``latent`` to the index
-    step, because ``indexer_prologue_k`` projects the index K from that latent.
+    Deviation from CUDA: the compress step hands its pre-RoPE ``latent`` to the
+    index step, because ``indexer_prologue_k_dsl`` projects the index K from
+    that latent, while CUDA writes the index K inside its compress step.
     """
 
-    # The prefill-graph contract is CUDA-only; ``_low_ratio_sources_break``
-    # short-circuits on ``is_in_breakable_cuda_graph()`` before this attr is read.
+    # Capability declaration for the shared model code, not a live switch on
+    # NPU: the prefill-graph contract is CUDA-only, and
+    # ``_low_ratio_sources_break`` short-circuits on
+    # ``is_in_breakable_cuda_graph()`` (never true here) before this attr is
+    # read. Declared so every backend answers the same question, and so NPU
+    # keeps selecting the single-call path if the breakable graph ever lands.
     low_ratio_prefill_graph = False
     # Read by ``_low_ratio_compress`` below; still unset on NPU because the
     # replay-tail path that writes it is CUDA-only, so it stays None.
@@ -1501,8 +1539,9 @@ class LowRatioCompressAscendBackendMixin:
             pool.set_compress_buffer(layer.layer_id, cache_index, index_k, None, True)
             return
         ds41 = _ds41_ops()
-        # Keep the NZ cast inside the traced region: hoisting it into a cached
-        # attribute makes aclgraph clone an NZ graph input back to ND.
+        # The FRACTAL_NZ cast deliberately stays inside the traced region, so
+        # the NZ tensor is never a graph input for aclgraph to clone back to
+        # ND. Do NOT hoist this cast into a cached attribute.
         # Both storage modes share every argument but the destination.
         common = dict(
             latent=latent.reshape(-1, latent.shape[-1]),
@@ -2318,6 +2357,46 @@ class LowRatioCompressAscendBackendMixin:
             layer > source for layer in self._dsv41_index_source_layers
         )
 
+    @staticmethod
+    def _dsv41_compact_1d(
+        dst: torch.Tensor,
+        values: torch.Tensor,
+        keep: torch.Tensor,
+        fill: int,
+    ) -> None:
+        """``_stable_compact_1d`` with a caller-chosen tail filler.
+
+        The scatter *adds* into ``dst``, so it must start at zero: filling it
+        with ``fill`` first would corrupt every written slot. The tail is
+        masked in afterwards; device-only, aclgraph-safe.
+        """
+        values = values.reshape(-1)
+        keep = keep.reshape(-1)
+        if values.numel() != keep.numel():
+            raise ValueError(
+                "dsv41 stable compact requires value/mask size equality, got "
+                f"{values.numel()} and {keep.numel()}"
+            )
+        dst.zero_()
+        if dst.numel() == 0 or values.numel() == 0:
+            dst.fill_(fill)
+            return
+        ranks = torch.cumsum(keep.to(torch.int64), dim=0) - 1
+        in_bounds = keep & (ranks < dst.numel())
+        safe_ranks = ranks.clamp(min=0, max=dst.numel() - 1)
+        compact = torch.where(
+            in_bounds,
+            values.to(dst.dtype),
+            torch.zeros_like(values, dtype=dst.dtype),
+        )
+        dst.scatter_add_(0, safe_ranks, compact)
+        if fill != 0:
+            # Written slots are exactly [0, kept); summing keeps the count
+            # on device.
+            kept = in_bounds.to(torch.int64).sum()
+            tail = torch.arange(dst.numel(), device=dst.device) >= kept
+            dst.masked_fill_(tail, fill)
+
     def _build_low_ratio_compress_metadata(self, forward_batch: ForwardBatch) -> None:
         """Eager half of the V4.1 metadata contract (V4 ``_compute_compress_locs``
         counterpart). aclgraph allocates these buffers at capture and refreshes
@@ -2907,6 +2986,8 @@ class DeepseekV4AscendAttnBackend(
                         "with the ops_transformer bundle for CANN 9.2.0. "
                         f"Failed to import an A3 operator: {exc}"
                     ) from exc
+            # Both A3 indexers and the A5 metadata path require fixed Q blocks.
+            _ensure_dsv41_static_verify_mode()
         self._dsv4_sliding_window_size = (
             cfg.sliding_window_size if cfg.sliding_window_size is not None else 128
         )
@@ -3050,7 +3131,10 @@ class DeepseekV4AscendAttnBackend(
     def _init_dspark_sparse_metadata(self, forward_batch: ForwardBatch) -> None:
         """Build block-noncausal SWA positions for a DSpark draft forward.
 
-        Each draft token attends to the trailing window and the whole block.
+        Every token in a DSpark draft block attends to the trailing SWA
+        context and to the whole current draft block.  The Ascend
+        sparse-attention operator consumes [T, N_kv, K] indices, where K must
+        be 128-aligned (logical token indices on A3, physical SWA slots on A5).
         """
         fm = self.forward_metadata
         fm.ori_sparse_indices = None
@@ -3369,6 +3453,10 @@ class DeepseekV4AscendAttnBackend(
             )
 
         if self._is_dspark_draft_worker:
+            if not is_npu_arch35():
+                self.graph_metadata["kernel_metadata_c1a"] = torch.zeros(
+                    2048, dtype=torch.int32, device=device
+                )
             block_size = self._dsv4_graph_tokens_per_req
             sparse_width = _dspark_sparse_width(
                 self._dsv4_sliding_window_size, block_size
@@ -3875,8 +3963,8 @@ class DeepseekV4AscendAttnBackend(
                 )
             )
         else:
-            # CPU mirror of the kv buffer written below, so the host metadata op
-            # reads it instead of syncing D2H.
+            # CPU mirror of the kv buffer written below, from its CPU source — the
+            # host metadata op reads this instead of a D2H sync.
             fm.seq_lens_cpu_int = self._seq_lens_cpu_int_view(ctx.bs)
             fm.seq_lens_cpu_int.copy_(ctx.final_seq_lens_cpu[: ctx.bs].clamp(min=1))
         # Refresh the live-row mask the captured graphs read; this is the only
@@ -4200,7 +4288,8 @@ class DeepseekV4AscendAttnBackend(
         ):
             if key in kernel_metadata_new:
                 fm.kernel_metadata[key].copy_(kernel_metadata_new[key])
-        if self._dsv4_has_c4:
+        # A3 drafts have no C4 pool; retain the upstream A5 refresh behavior.
+        if is_npu_arch35() or self._dsv4_has_c4:
             fm.c4_topk_indices.fill_(-1)
 
     def _apply_dsv4_graph_metadata(
@@ -4525,7 +4614,8 @@ class DeepseekV4AscendAttnBackend(
         if getattr(fm, "kernel_metadata", None) is None:
             fm.kernel_metadata = {}
         if self._dsv4_has_low_ratio:
-            # V4.1 metadata comes from the ds41 operators only (MQSMLA + QLI).
+            # V4.1 metadata comes from the ds41 operators only (MQSMLA + QLI);
+            # the V4 entries do not apply.
             return self._dsv41_attention_kernel_metadata(
                 forward_batch
             ) | self._dsv41_index_kernel_metadata(forward_batch)

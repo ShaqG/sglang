@@ -126,14 +126,19 @@ class DSV4ReqToTokenTablesMixin:
         return indices
 
     def _dsv4_free(self, req) -> None:
-        """Drop this request's slot-scoped DSV4 state before the slot is reused.
+        """Release this request's DSV4 slot-scoped resources before the slot is
+        handed to the next request.
 
-        The C128-owning allocator takes the req-aware ``free``. DeepSeek-V4.1 runs
-        on the generic SWA allocator: it has no C128 pages to release, but it
-        still keeps the ratio-2 pending pair per request slot.
+        ``DSV4NPUTokenToKVPoolAllocator`` owns the C128 page allocator, so it
+        takes the req-aware ``free`` (which also clears the request-scoped
+        state). DeepSeek-V4.1 runs on the generic SWA allocator -- its compressed
+        slots are ``full_loc // ratio``, so there are no C128 pages to release --
+        but the request-scoped compressed state (the ratio-2 pending pair, one
+        ring per request slot) still has to be dropped, or the next owner of the
+        slot inherits this request's pending token.
 
-        ``_dsv4_allocator`` stays None between ``__init__`` and
-        ``register_dsv4_allocator``.
+        May be None between ``__init__`` and ``register_dsv4_allocator`` --
+        defensive None check.
         """
         allocator = self._dsv4_allocator
         if allocator is None:
@@ -144,7 +149,9 @@ class DSV4ReqToTokenTablesMixin:
         req_pool_idx = req.kv.req_pool_idx
         if req_pool_idx is None:
             return
-        allocator.get_kvcache().clear_request_scoped_state(int(req_pool_idx))
+        clear = getattr(allocator.get_kvcache(), "clear_request_scoped_state", None)
+        if clear is not None:
+            clear(int(req_pool_idx))
 
 
 class DSV4NPUReqToTokenPool(DSV4ReqToTokenTablesMixin, ReqToTokenPool):

@@ -1339,6 +1339,9 @@ class DSV4PoolConfigurator(MemoryPoolConfigurator):
             use_fp4_indexer=not self._npu_low_ratio_bf16,
             use_bf16_indexer=self._npu_low_ratio_bf16,
         )
+        if self._npu_low_ratio_bf16:
+            # Matches DSV41NPUIndexerPool: BF16 K only, no packed copy/scales.
+            self.low_ratio_index_bytes = self.indexer_head_dim * torch.bfloat16.itemsize
 
         # kvc.sliding_window_size is None on a runner without SWA layers.
         self._swa_ring_size = get_swa_ring_size(cfg.window_size, self.is_speculative)

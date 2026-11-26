@@ -64,11 +64,12 @@ class NPUDeepSeekV4SingleKVPool(DeepSeekV4SingleKVPool):
         kernel_page_size: int,
         **kwargs,
     ):
-        # Set before super().__init__: it calls _create_buffers() ->
+        # Set before super().__init__ — it calls _create_buffers() ->
         # create_buffer(), which reads self.layout and self.kernel_page_size.
         self.layout = layout
         self.kernel_page_size = kernel_page_size
-        # The CUDA base __init__ has no kernel_page_size parameter.
+        # kernel_page_size is consumed here: the CUDA base __init__ has no
+        # such parameter, so it must not be forwarded.
         super().__init__(*args, **kwargs)
 
     def paged_buffer_info(self) -> DSV4PagedBufferInfo:
@@ -181,11 +182,14 @@ class DSV41NPUSingleKVPool(NPUDeepSeekV4SingleKVPool):
 class NPUCompressStatePool(CompressStatePool):
     """Thin Atlas adapter over the shared GPU-style ring state pool.
 
-    Allocation, sizing, ring ownership and address translation are inherited from
-    :class:`CompressStatePool`. NPU requests a contiguous 3-D view, enforces the
-    FP32 state-cache contract and replaces invalid locations with a cleared row:
-    location 0 is valid in explicit mode, and the fused compressor kernels
-    consume unsigned offsets.
+    Allocation, sizing, ring ownership and address translation are inherited
+    from :class:`CompressStatePool`. NPU only requests a contiguous 3-D view,
+    enforces the FP32 state-cache contract and replaces invalid locations with
+    a cleared positive dummy row for explicit-location callers.
+
+    Location 0 is valid in explicit mode. Invalid/history-padding locations map
+    to the final cleared row instead of ``-1`` because the arch22 kernel consumes
+    unsigned offsets.
     """
 
     def __init__(
@@ -273,8 +277,8 @@ class NPUDeepSeekV4IndexerPool(DeepSeekV4IndexerPool):
         super().__init__(*args, **kwargs)
 
     def _create_buffer(self):
-        # The packed CUDA buffer is unused on NPU; keep the attribute for the
-        # generic ``is not None`` checks.
+        # No super()._create_buffer(): the packed CUDA buffer is dead memory on
+        # NPU; keep the attr defined (as None) for generic ``is not None`` checks.
         self.index_k_with_scale_buffer = None
         kp = self._kernel_page_size
         npu_num_pages = (self.size + kp + 1) // kp
@@ -396,9 +400,9 @@ class DSV41NPUIndexerPool(NPUDeepSeekV4IndexerPool):
     ``get_dsv4_indexer_bytes_per_token(..., use_fp4_indexer=True)``. The inherited
     fp8-shaped buffers are replaced through :meth:`_npu_index_row_dims`.
 
-    K is written by the operator itself (its ``cache_index`` is an INT64 loc whose
-    ``-1`` entries are skipped), so the inherited torch scatter
-    :meth:`set_index_k_scale` is not used.
+    On A5 K is written by the operator itself (its ``cache_index`` is an INT64
+    loc whose ``-1`` entries are skipped), so the inherited torch scatter
+    :meth:`set_index_k_scale` is not used; A3 scatters unquantized BF16 rows.
     """
 
     def __init__(self, *args, kernel_page_size: int, **kwargs):
@@ -467,7 +471,9 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
         )
 
     def compressed_kv_layout(self, compress_ratio: int):
-        """V4.1 low ratios use BF16 on A3 and epilog_v2 FP4 rows on A5."""
+        """Row format of a compressed pool. V4.1's low ratios take the
+        epilog_v2 fp4 row on arch35 and the unquantized BF16 row on A3; the
+        V4 ratios follow the part."""
         if compress_ratio in NPUDSV4KVLayout.COMPRESSED_RATIOS and self._is_v41_model():
             return (
                 NPUDSV4KVLayout.V41_CMP_FP4
@@ -594,11 +600,12 @@ class DSV4NPUTokenToKVPool(DeepSeekV4TokenToKVPool):
         """Ratio-2 pending-pair state exposed as a physical
         ``[block_num, ring_size, 2*D]`` bank.
 
-        The community factory leaves the flat ``page_size=1`` default, on which
-        :attr:`CompressStatePool.state_cache_3d` raises. That view is the
-        ``state_cache`` the fused ``ds41.compressor`` gets on arch35, with one
-        request bank per ``state_block_table`` row. A3 also needs physical
-        capacity for TP-padded batches.
+        The community factory allocates the same ring buffer but leaves the flat
+        ``page_size=1`` default, on which :attr:`CompressStatePool.state_cache_3d`
+        raises — and that view is exactly the ``state_cache`` the fused
+        ``ds41.compressor`` gets on A5 (cache_mode=2 CYCLE addresses one request
+        bank per ``state_block_table`` row). A3 also needs physical capacity for
+        TP-padded batches. Ring ownership and PD transfer indices are unchanged.
         """
         ring_size = self.get_ring_size(2)
         num_req_slots = self.num_req_slots

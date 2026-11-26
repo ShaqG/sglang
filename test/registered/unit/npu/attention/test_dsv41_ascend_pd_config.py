@@ -1,12 +1,14 @@
 """CPU coverage of the V4.1 DSpark PD configuration gate."""
 
+import ast
 import enum
 import sys
 import unittest
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-from test_dsv41_a3_cache import ROOT, _load_definitions
+ROOT = next(parent for parent in Path(__file__).resolve().parents if (parent / "python/sglang").is_dir())
 
 
 class VerifyMode(enum.Enum):
@@ -53,11 +55,14 @@ def validate(*, mode=VerifyMode.STATIC, **overrides):
             is_cuda=cfg.device == "cuda", is_hip=False
         ),
     }
-    _load_definitions(
-        ROOT / "python/sglang/srt/arg_groups/deepseek_v4_hook.py",
-        {"validate_deepseek_v41_features"},
-        ns,
+    source = ROOT / "python/sglang/srt/arg_groups/deepseek_v4_hook.py"
+    function = next(
+        node for node in ast.parse(source.read_text()).body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "validate_deepseek_v41_features"
     )
+    ns["ServerArgs"] = object
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), ns)
     with patch.dict(sys.modules, {gate.__name__: gate, ragged.__name__: ragged}):
         ns["validate_deepseek_v41_features"](cfg)
 

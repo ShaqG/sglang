@@ -202,7 +202,7 @@ export const MiniMaxM27Deployment = () => {
     }
 
     if (useAllreduceFusion) {
-      cmd += ' \\\n  --flashinfer-allreduce-fusion-backend auto';
+      cmd += ' \\\n  --enable-flashinfer-allreduce-fusion';
     }
 
     return cmd;

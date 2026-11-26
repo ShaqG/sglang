@@ -94,12 +94,8 @@ class TestPaddedExtendAttention(CustomTestCase):
             (ForwardMode.TARGET_VERIFY, 5, None),
             (ForwardMode.DECODE, 5, None),
         ]
-        backend = SimpleNamespace(plans_padded_extend_rows=False)
         for mode, real, expected in cases:
-            with (
-                self.subTest(mode=mode, real=real),
-                patch.object(radix_attention, "get_attn_backend", return_value=backend),
-            ):
+            with self.subTest(mode=mode, real=real):
                 self.assertEqual(
                     radix_attention.padded_extend_real_tokens(8, _batch(mode, real)),
                     expected,

@@ -117,7 +117,7 @@ export const GLM45VDeployment = () => {
 
     // Add tool call parser
     if (toolcall === 'enabled') {
-      cmd += ' \\\n  --tool-call-parser glm';
+      cmd += ' \\\n  --tool-call-parser glm45';
     }
 
     return cmd;

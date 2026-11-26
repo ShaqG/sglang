@@ -159,9 +159,7 @@ def http_request(
         headers["Authorization"] = f"Bearer {api_key}"
 
     if stream:
-        return requests.post(
-            url, json=json, stream=True, headers=headers, verify=verify
-        )
+        return requests.post(url, json=json, stream=True, headers=headers)
     else:
         req = urllib.request.Request(url, headers=headers, method=method)
         if json is None:

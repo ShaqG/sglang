@@ -39,7 +39,7 @@ from sglang.test.ci.ci_register import register_amd_ci
 
 register_amd_ci(
     est_time=300,
-    stage="base-a-jit-kernel-benchmark",
+    stage="jit-kernel-benchmark",
     runner_config="amd",
     disabled="manual microbenchmark",
 )

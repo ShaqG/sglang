@@ -33,7 +33,6 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.ernie4 import Ernie4_5_ForCausalLM, Ernie4DecoderLayer
-from sglang.srt.models.utils import keeps_no_quant_config
 
 
 class Ernie4ModelMTP(nn.Module):
@@ -100,8 +99,6 @@ class Ernie4ModelMTP(nn.Module):
 
 
 class Ernie4_5_MoeForCausalLMMTP(nn.Module):
-    own_quant_config = staticmethod(keeps_no_quant_config)
-
     def __init__(
         self,
         config: Ernie4_5_MoeConfig,

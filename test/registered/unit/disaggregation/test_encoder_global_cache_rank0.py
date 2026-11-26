@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import torch
 
 import sglang.srt.disaggregation.encoder.server as encoder_server
-from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
-from sglang.srt.disaggregation.encoder.server import EncoderProfiler, MMEncoder
+from sglang.srt.disaggregation.encoder.server import MMEncoder
 from sglang.srt.multimodal.modality import Modality
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -117,12 +116,16 @@ class TestEncoderGlobalCache(CustomTestCase):
             encoder.mm_global_cache = None
             encoder.mm_global_cache_enabled = enabled
             encoder.use_mooncake = use_mooncake
-            encoder.profiler = EncoderProfiler(encoder.rank)
+            encoder.profiler = None
             ctx = object()
             encoder._prepare_encode_context_on_all_ranks = AsyncMock(return_value=ctx)
             encoder._compute_embedding = AsyncMock(return_value=None)
             encoder._stage_errors = Mock(side_effect=AssertionError("unexpected error"))
-            req_id = f"{HEALTH_CHECK_RID_PREFIX}-probe" if health_check else "req"
+            req_id = (
+                f"{encoder_server.HEALTH_CHECK_RID_PREFIX}-probe"
+                if health_check
+                else "req"
+            )
             requests = [{"req_id": req_id}]
 
             result = await encoder.batch_encode(requests, Modality.IMAGE)

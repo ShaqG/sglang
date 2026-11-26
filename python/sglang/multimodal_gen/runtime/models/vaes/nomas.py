@@ -20,19 +20,13 @@ from msgspec import Struct
 from torch import nn
 from torch.nn import functional as F
 
-from sglang.kernels.arch import current_arch
-from sglang.kernels.ops.diffusion import (
-    BitExactFusionGate,
-    can_use_rmsnorm_mean_square,
-    rmsnorm_mean_square_bitexact,
-)
 from sglang.multimodal_gen.configs.models.vaes.nomas import NomasVAEConfig
 from sglang.multimodal_gen.runtime.distributed.parallel_state import (
     get_decode_parallel_group_coordinator,
     get_decode_parallel_world_size,
     model_parallel_is_initialized,
 )
-from sglang.multimodal_gen.runtime.layers.kvcache.nomas_segment_cache import (
+from sglang.multimodal_gen.runtime.models.dits.nomas_kv_cache import (
     _block_mask_builder,
     _flex_kernel,
 )
@@ -40,17 +34,13 @@ from sglang.multimodal_gen.runtime.models.dits.nomas_layers import (
     _compile_exact,
     _fused_ok,
 )
-from sglang.multimodal_gen.runtime.utils.logging_utils import init_logger
 
-logger = init_logger(__name__)
-_QK_MROPE_FUSION = BitExactFusionGate("Nomas VAE Q/K norm + MRoPE", per_signature=True)
-_MEAN_SQUARE_FUSION = BitExactFusionGate("Nomas VAE mean-square", per_signature=True)
 TUBELET = (4, 16, 16)
 TUBE_DIM = TUBELET[0] * TUBELET[1] * TUBELET[2] * 3
 LATENT_CHANNELS = 32
 # A DCAE latent cell is (4, 32, 32) pixels: 1 tubelet in time, 2 x 2 in space.
 LATENT_TOKEN_GRID = 2
-# Bound the FP32 square buffer used by the mean-square fallback per Q/K chunk.
+# Target FP32 bytes per fused Q/K chunk; only the squares are materialised.
 _QK_FUSED_CHUNK_BYTES = 256 * 2**20
 
 
@@ -147,7 +137,7 @@ def apply_mrope(
     return x * cos + rotated * sin
 
 
-# The fallback retains ATen's mean-square summation order.
+# Mean-square reductions stay in ATen to keep their summation order.
 def _square(x):
     return x.float().pow(2)
 
@@ -193,17 +183,7 @@ def _compiled_silu_mul():
 
 
 def _mean_square(x):
-    def reference():
-        return _compiled_square()(x).mean(-1, keepdim=True)
-
-    if can_use_rmsnorm_mean_square(x):
-        return _MEAN_SQUARE_FUSION.run(
-            lambda: rmsnorm_mean_square_bitexact(x),
-            reference,
-            sig=(x.shape, x.stride(), x.device),
-            logger=logger,
-        )
-    return reference()
+    return _compiled_square()(x).mean(-1, keepdim=True)
 
 
 def local_attention_layout(grid: tuple[int, int, int], tile: int, device):
@@ -316,29 +296,16 @@ class GenAttention(nn.Module):
         return apply_mrope(normalized, cos, sin, self.arch.rope_sections).to(dtype)
 
     def _prepare_qk_fused(self, x, cos, sin, norm_t, norm_hw, dtype):
-        """Keep ATen's reduction order and the compiled reference's FP32 rounding."""
+        """Same values as the eager path: ATen mean squares, one fused kernel for the rest."""
         half = x.shape[-1] // 2
         result = torch.empty_like(x, dtype=dtype)
-        use_fused = (
-            x.dtype
-            == dtype
-            == norm_t.weight.dtype
-            == norm_hw.weight.dtype
-            == torch.bfloat16
-            and self.arch.rope_sections == (64, 32, 32)
-            and x.stride(-1) == 1
-            and current_arch().is_sm_at_least(10)
-        )
-        if use_fused:
-            from sglang.kernels.ops.diffusion import fused_nomas_qk_norm_mrope
-
-        # First-use verification and unsupported layouts materialize FP32 squares.
+        # Only the FP32 squares are materialised now, so far larger chunks fit.
         chunk = max(
             1, _QK_FUSED_CHUNK_BYTES // (x.shape[0] * x.shape[2] * x.shape[3] * 4)
         )
         for first in range(0, x.shape[1], chunk):
             part = x[:, first : first + chunk]
-            args = (
+            result[:, first : first + chunk] = _compiled_qk_norm_mrope()(
                 part,
                 _mean_square(part[..., :half]),
                 _mean_square(part[..., half:]),
@@ -347,21 +314,9 @@ class GenAttention(nn.Module):
                 norm_hw.weight,
                 cos[:, first : first + chunk],
                 sin[:, first : first + chunk],
+                self.arch.rope_sections,
+                dtype,
             )
-            reference = lambda: _compiled_qk_norm_mrope()(
-                *args, self.arch.rope_sections, dtype
-            )
-            if use_fused:
-                output = _QK_MROPE_FUSION.run(
-                    lambda: fused_nomas_qk_norm_mrope(*args),
-                    reference,
-                    sig=(part.device, part.shape, part.stride(), norm_t.eps),
-                    logger=logger,
-                    reraise=(ValueError,),
-                )
-            else:
-                output = reference()
-            result[:, first : first + chunk] = output
         return result
 
     def forward(

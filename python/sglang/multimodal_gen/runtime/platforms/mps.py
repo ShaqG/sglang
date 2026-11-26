@@ -23,6 +23,7 @@ class MpsPlatform(Platform):
     device_name: str = "mps"
     device_type: str = "mps"
     dispatch_key: str = "MPS"
+    device_control_env_var: str = "MPS_VISIBLE_DEVICES"
 
     @classmethod
     @lru_cache(maxsize=1)

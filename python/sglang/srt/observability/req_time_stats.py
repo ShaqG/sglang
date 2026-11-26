@@ -248,10 +248,20 @@ class RequestStage:
         level=3,
         metrics_is_observed=True,
     )
+    DECODE_QUICK_FINISH = RequestStageConfig(
+        "quick_finish",
+        level=1,
+        metrics_is_observed=True,
+    )
 
     # speculative decode
     SPEC_DRAFT = RequestStageConfig(
         "spec_draft",
+        level=2,
+    )
+
+    SPEC_VERIFY = RequestStageConfig(
+        "spec_verify",
         level=2,
     )
 
@@ -260,6 +270,9 @@ class RequestStage:
         "run_batch_cpu",
         level=4,
     )
+
+    # other
+    ANONYMOUS = RequestStageConfig("")
 
 
 @dataclass
@@ -720,6 +733,7 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
 
     # speculative decoding
     spec_draft_start_time: float = 0.0
+    spec_verify_start_time: float = 0.0
 
     # other
     transfer_speed_gb_s: float = 0.0
@@ -766,6 +780,10 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
         if self.trace_ctx.tracing_enable:
             stage = RequestStage.SPEC_DRAFT
             self.trace_slice(stage, self.spec_draft_start_time, ts)
+
+    def set_spec_verify_start_time(self, ts=None):
+        ts = ts or time.perf_counter()
+        self.spec_verify_start_time = ts
 
     def set_run_batch_cpu_start_time(self, ts=None, attrs=None):
         ts = ts or time.perf_counter()
@@ -1347,4 +1365,8 @@ def flush_trace_batch(reqs: List[Any]):
     if reqs is None or not get_global_tracing_enabled():
         return
     for req in reqs:
-        req.time_stats.trace_ctx.flush()
+        time_stats = getattr(req, "time_stats", None)
+        if time_stats is not None:
+            trace_ctx = getattr(time_stats, "trace_ctx", None)
+            if trace_ctx is not None:
+                trace_ctx.flush()

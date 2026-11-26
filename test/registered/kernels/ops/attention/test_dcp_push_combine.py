@@ -66,7 +66,7 @@ def _setup() -> ps.GroupCoordinator:
         max_push_size=MAX_ROWS * (H // world_size) * pc.SLOT_BYTES_PER_ROW,
     )
     assert not comm.disabled
-    pc.register_comm(lambda: comm.obj, world_size=comm.world_size)
+    pc.register_comm(comm.obj)
     _COMM = comm
     atexit.register(comm.close)  # LIFO: runs before destroy_process_group
     return coord

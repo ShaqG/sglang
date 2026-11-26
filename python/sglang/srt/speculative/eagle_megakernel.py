@@ -253,21 +253,8 @@ class EagleMegakernel(EagleDraftRuntime):
         with the runner's outputs, and returns the batch sizes whose graphs run it."""
         if self._draft_extend is None:
             return frozenset()
-        from sglang.srt.speculative.eagle_utils import (
-            get_draft_recurrent_hidden_state_spec,
-        )
-
-        hidden_size, hidden_dtype = get_draft_recurrent_hidden_state_spec(
-            self._draft_runner
-        )
-        if hidden_size is None:
-            return frozenset()
         out = self._draft_inputs_as_extend_outputs(runner.max_bs)
-        if (
-            out is None
-            or out.hidden.shape[1] != hidden_size
-            or out.hidden.dtype != hidden_dtype
-        ):
+        if out is None:
             out = SimpleNamespace(
                 topk_index=torch.zeros(
                     (runner.max_bs, 1), dtype=torch.int64, device=runner.device
@@ -276,8 +263,8 @@ class EagleMegakernel(EagleDraftRuntime):
                     (runner.max_bs, 1), dtype=torch.float32, device=runner.device
                 ),
                 hidden=torch.zeros(
-                    (runner.max_bs, hidden_size),
-                    dtype=hidden_dtype,
+                    (runner.max_bs, self._draft_config.hidden_size),
+                    dtype=self._draft_config.dtype,
                     device=runner.device,
                 ),
             )

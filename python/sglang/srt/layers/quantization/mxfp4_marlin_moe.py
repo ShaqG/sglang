@@ -19,10 +19,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def build_marlin_moe_quant_info(
-    layer: Module, weight_bits: int = 4
-) -> MarlinMoeQuantInfo:
-    """Build Marlin quant_info for MXFP4 or MXFP8 MoE experts.
+def build_marlin_moe_quant_info(layer: Module) -> MarlinMoeQuantInfo:
+    """Build the Marlin quant_info for an MXFP4 MoE layer.
 
     Single source for the runner inputs shared by the marlin path of
     ``Mxfp4MoEMethod.apply`` and :class:`Mxfp4MarlinMoEMethod`, including
@@ -37,7 +35,7 @@ def build_marlin_moe_quant_info(
         w2_scales=layer.w2_weight_scale,
         w13_g_idx_sort_indices=None,
         w2_g_idx_sort_indices=None,
-        weight_bits=weight_bits,
+        weight_bits=4,
         is_k_full=True,
         w13_bias=getattr(layer, "w13_weight_bias", None),
         w2_bias=getattr(layer, "w2_weight_bias", None),

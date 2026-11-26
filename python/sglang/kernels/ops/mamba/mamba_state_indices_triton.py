@@ -21,7 +21,7 @@ import triton
 import triton.language as tl
 
 
-@triton.jit(do_not_specialize=["valid_bs", "total_bs"])
+@triton.jit
 def _fused_replay_state_indices_kernel(
     req_pool_indices_ptr,  # (total_bs,) int64 — static replay buffer
     mamba_map_ptr,  # (req_pool_size,) int32 — req_index_to_mamba_index_mapping
@@ -81,8 +81,7 @@ def fused_replay_state_indices(
         v2p,
         valid_bs,
         total_bs,
-        # Floored so one compiled variant serves every replay batch size.
-        BS_UPPER=max(triton.next_power_of_2(total_bs), 64),
+        BS_UPPER=triton.next_power_of_2(total_bs),
         HAS_V2P=v2p is not None,
     )
     return out_state_indices[:total_bs]

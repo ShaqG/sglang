@@ -561,8 +561,6 @@ def action_generation_response(
         response["cache"] = output["cache"]
     if "parallel" in output:
         response["parallel"] = output["parallel"]
-    if "extras" in output:
-        response["extras"] = output["extras"]
     return response
 
 

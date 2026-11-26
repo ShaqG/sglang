@@ -1,6 +1,5 @@
 //! TokenizerManager
 
-pub mod byte_tables;
 pub mod channel;
 pub mod detokenizer;
 pub mod from_scheduler;

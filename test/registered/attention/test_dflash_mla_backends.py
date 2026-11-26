@@ -31,8 +31,6 @@ register_cuda_ci(est_time=40, stage="base-b", runner_config="4-gpu-b200")
 HIDDEN, HEADS, RANK, NOPE, ROPE, VALUE, BLOCK = 128, 32, 512, 128, 64, 128, 8
 CAPACITY = 256
 BACKENDS = ("triton", "flashinfer")
-# Row p attends [p - 15, p]: drops keys of the 31- and 63-token prefixes.
-SLIDING_WINDOW = 16
 
 
 def _rope(x, positions):
@@ -45,9 +43,7 @@ def _rope(x, positions):
     return x * cos[:, None] + torch.stack((-b, a), -1).flatten(-2) * sin[:, None]
 
 
-def _expanded_reference(
-    module, prefix, hidden, positions, *, causal, window_left=None, heads=HEADS
-):
+def _expanded_reference(module, prefix, hidden, positions, *, causal):
     """Independent FP32 SpecForge equations with per-head K and V."""
     w = {name: p.float() for name, p in module.named_parameters()}
 
@@ -57,7 +53,7 @@ def _expanded_reference(
     hidden = hidden.float()
     q_nope, q_pe = (
         F.linear(hidden, w["q_proj.weight"])
-        .view(-1, heads, NOPE + ROPE)
+        .view(-1, HEADS, NOPE + ROPE)
         .split((NOPE, ROPE), -1)
     )
     q = torch.cat((q_nope, _rope(q_pe, positions)), -1)
@@ -67,18 +63,17 @@ def _expanded_reference(
         c, k_pe = F.linear(x, w["kv_a_proj_with_mqa.weight"]).split((RANK, ROPE), -1)
         k_nope, v = (
             F.linear(norm(c, "kv_a_layernorm.weight"), w["kv_b_proj.weight"])
-            .view(-1, heads, NOPE + VALUE)
+            .view(-1, HEADS, NOPE + VALUE)
             .split((NOPE, VALUE), -1)
         )
         k_pe = _rope(k_pe[:, None], torch.arange(len(x), device=x.device))
-        k = torch.cat((k_nope, k_pe.expand(-1, heads, -1)), -1)
+        k = torch.cat((k_nope, k_pe.expand(-1, HEADS, -1)), -1)
         scores = torch.einsum("qhd,khd->hqk", q[i * BLOCK : (i + 1) * BLOCK], k)
         if causal:
-            keys = torch.arange(len(x), device=x.device)[None]
-            rows = (len(ctx) + torch.arange(BLOCK, device=x.device))[:, None]
-            allowed = keys <= rows
-            if window_left is not None:
-                allowed &= keys >= rows - window_left
+            allowed = (
+                torch.arange(len(x), device=x.device)[None]
+                <= (len(ctx) + torch.arange(BLOCK, device=x.device))[:, None]
+            )
             scores.masked_fill_(~allowed[None], -torch.inf)
         probs = (scores * (NOPE + ROPE) ** -0.5).softmax(-1)
         output = torch.einsum("hqk,khd->qhd", probs, v).flatten(1)
@@ -93,9 +88,9 @@ class TestDFlashMLABackends(unittest.TestCase):
         self.addCleanup(reset_context)
         publish(ServerArgs(model_path="dummy", device="cuda", tp_size=1), role="test")
 
-    def _make_runner(self, backend_name, config, heads):
+    def _make_runner(self, backend_name, config):
         model_config = TinyMLAModelConfig(
-            num_heads=heads,
+            num_heads=HEADS,
             kv_lora_rank=RANK,
             qk_rope_head_dim=ROPE,
             hidden_size=HIDDEN,
@@ -110,7 +105,7 @@ class TestDFlashMLABackends(unittest.TestCase):
             name="dflash",
             backend=backend_name,
             forward_mode=ForwardMode.TARGET_VERIFY,
-            num_heads=heads,
+            num_heads=HEADS,
             page_size=32,
             prefix_lens=(0, 31),
             extend_lens=(BLOCK, BLOCK),
@@ -147,13 +142,12 @@ class TestDFlashMLABackends(unittest.TestCase):
         backend.decode_attention_backend_str = backend_name
         return backend
 
-    def _check(self, backend_name, *, causal, sliding_window=None, heads=HEADS):
+    def _check(self, backend_name, *, causal):
         torch.manual_seed(20261016)
-        window_left = None if sliding_window is None else sliding_window - 1
         config = Qwen3Config(
             hidden_size=HIDDEN,
             num_hidden_layers=1,
-            num_attention_heads=heads,
+            num_attention_heads=HEADS,
             num_key_value_heads=1,
             kv_lora_rank=RANK,
             qk_nope_head_dim=NOPE,
@@ -163,15 +157,10 @@ class TestDFlashMLABackends(unittest.TestCase):
             rope_theta=10000,
             max_position_embeddings=CAPACITY,
             is_causal=causal,
-            layer_types=[
-                "full_attention" if sliding_window is None else "sliding_attention"
-            ],
-            use_sliding_window=sliding_window is not None,
-            sliding_window=sliding_window,
+            layer_types=["full_attention"],
             dflash_config={"attention_mode": "mla", "block_size": BLOCK},
         )
-        runner = self._make_runner(backend_name, config, heads)
-        runner.sliding_window_size = window_left
+        runner = self._make_runner(backend_name, config)
         module = DFlashMLAAttention(config, layer_id=0)
         # get_rope() shares one cached instance, and the CUDA RoPE kernel reads
         # an FP32 table that Module.to would round to BF16.
@@ -196,7 +185,7 @@ class TestDFlashMLABackends(unittest.TestCase):
                 name="dflash",
                 backend=backend_name,
                 forward_mode=ForwardMode.TARGET_VERIFY,
-                num_heads=heads,
+                num_heads=HEADS,
                 page_size=32,
                 prefix_lens=prefix_lens,
                 extend_lens=(BLOCK,) * len(prefix_lens),
@@ -236,13 +225,7 @@ class TestDFlashMLABackends(unittest.TestCase):
                         ].long(),
                     )
             expected = _expanded_reference(
-                module,
-                prefix,
-                hidden,
-                batch.positions,
-                causal=causal,
-                window_left=window_left,
-                heads=heads,
+                module, prefix, hidden, batch.positions, causal=causal
             )
             return batch, hidden, expected
 
@@ -296,10 +279,6 @@ class TestDFlashMLABackends(unittest.TestCase):
 
     def test_causal(self):
         self._check_backends(causal=True)
-
-    def test_sliding_window(self):
-        self._check("trtllm_mla", causal=True, sliding_window=SLIDING_WINDOW)
-        self._check("cutedsl_mla", causal=True, sliding_window=SLIDING_WINDOW, heads=96)
 
 
 if __name__ == "__main__":

@@ -181,7 +181,9 @@ threads_info: Dict[int, TraceThreadInfo] = {}
 # Used by trace_async to forward thread info to the exporter process.
 _on_thread_info_set = None
 
-get_cur_time_ns = lambda: int(time.time_ns())
+get_cur_time_ns = lambda: int(time.time() * 1e9)
+if hasattr(time, "time_ns"):
+    get_cur_time_ns = lambda: int(time.time_ns())
 
 
 def _get_host_id() -> str:
@@ -210,6 +212,7 @@ def process_tracing_init(
 ):
     """Initialize OpenTelemetry for this process. Idempotent."""
     global opentelemetry_initialized
+    global get_cur_time_ns
     global tracer
     global global_trace_modules
 
@@ -392,6 +395,9 @@ class TraceReqContext:
         self.events_cache: List[TraceEvent] = []
 
         self.pid: int = threading.get_native_id()
+
+    def is_tracing_enabled(self) -> bool:
+        return self.tracing_enable
 
     def __create_thread_context(self, ts: int):
         if self.pid not in threads_info:
@@ -804,6 +810,20 @@ class TraceReqContext:
         if attrs is None:
             attrs = {}
         self.events_cache.append(TraceEvent(name, ts, attrs))
+
+    def trace_set_root_attrs(self, attrs: Dict[str, Any]):
+        if not self.tracing_enable:
+            return
+
+        if self.root_span:
+            self.root_span.set_attributes(attrs)
+
+    def trace_set_thread_attrs(self, attrs: Dict[str, Any]):
+        if self.__check_fast_return():
+            return
+
+        if self.thread_context.thread_span:
+            self.thread_context.thread_span.set_attributes(attrs)
 
     def abort(self, ts=None, abort_info: Optional[Dict] = None):
         if self.__check_fast_return():

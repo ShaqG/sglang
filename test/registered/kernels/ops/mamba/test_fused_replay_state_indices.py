@@ -203,8 +203,10 @@ class TestFusedReplayStateIndices(CustomTestCase):
         )
 
     def test_v2p_matrix(self):
-        for total_bs in (1, 7, 32, 33, 63, 64, 65, 129):
-            paddings = sorted({0, 1, total_bs // 2, total_bs - 1, total_bs})
+        for total_bs in (1, 7, 32, 33):
+            paddings = sorted(
+                {0, 1, total_bs // 2, total_bs - 1} & set(range(total_bs))
+            )
             for num_padding in paddings:
                 for seed in (0, 1):
                     with self.subTest(
@@ -216,9 +218,11 @@ class TestFusedReplayStateIndices(CustomTestCase):
 
     def test_matrix(self):
         # Non-power-of-two sizes (7, 33) exercise the BS_UPPER in_range mask;
-        # num_padding also covers fully padded batches and both sides of the 64-row floor.
-        for total_bs in (1, 2, 7, 32, 33, 63, 64, 65, 129):
-            paddings = sorted({0, 1, total_bs // 2, total_bs - 1, total_bs})
+        # num_padding sweeps none / one / half / all-but-one padded rows.
+        for total_bs in (1, 2, 7, 32, 33):
+            paddings = sorted(
+                {0, 1, total_bs // 2, total_bs - 1} & set(range(total_bs))
+            )
             for num_padding in paddings:
                 for seed in (0, 1, 2):
                     with self.subTest(

@@ -29,8 +29,6 @@ from sglang.srt.utils import kill_process_tree
 from sglang.test.server_fixtures.disaggregation_fixture import get_rdma_devices_args
 from sglang.test.sgl_eval_utils import run_sgl_eval
 from sglang.test.test_utils import (
-    ADMIN_HEADERS_FOR_TEST,
-    ADMIN_LAUNCH_ARGS_FOR_TEST,
     DEFAULT_MODEL_NAME_FOR_TEST_MLA,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     CustomTestCase,
@@ -216,7 +214,6 @@ class _ElasticScaleUpEndToEndBase(CustomTestCase):
             dcp_size=cls.DCP_SIZE,
         )
         primary_args.extend(cls.ATTENTION_BACKEND_ARGS)
-        primary_args.extend(ADMIN_LAUNCH_ARGS_FOR_TEST)
         primary_env = os.environ.copy()
         visible_devices = _visible_device_ids()
         if len(visible_devices) < cls.PRIMARY_TP:
@@ -381,11 +378,7 @@ class _ElasticScaleUpEndToEndBase(CustomTestCase):
                 "Joining group exited before scale request; see joining log",
             )
 
-        resp = self._post(
-            "/scale_elastic_ep",
-            json={"new_ep_size": target_ep_size},
-            headers=ADMIN_HEADERS_FOR_TEST,
-        )
+        resp = self._post("/scale_elastic_ep", json={"new_ep_size": target_ep_size})
         self.assertEqual(resp.status_code, 200, resp.text)
         body = resp.json()
         self.assertEqual(body["old_ep_size"], old_ep_size)
@@ -393,11 +386,7 @@ class _ElasticScaleUpEndToEndBase(CustomTestCase):
 
         deadline = time.time() + 300
         while time.time() < deadline:
-            resp = requests.get(
-                f"{self.base_url}/is_scaling_elastic_ep",
-                timeout=60,
-                headers=ADMIN_HEADERS_FOR_TEST,
-            )
+            resp = requests.get(f"{self.base_url}/is_scaling_elastic_ep", timeout=60)
             state = resp.json() if resp.ok else None
             if state is not None and not state.get("is_scaling_elastic_ep", True):
                 self.assertEqual(state.get("effective_ep_size"), target_ep_size)

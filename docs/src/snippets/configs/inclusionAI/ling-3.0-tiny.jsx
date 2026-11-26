@@ -78,7 +78,7 @@ sgl-eval run gsm8k \\
     parsers: {
       items: [
         { id: "reasoning", label: "Reasoning Parser", flag: "--reasoning-parser deepseek-r1" },
-        { id: "toolCall", label: "Tool Call Parser", flag: "--tool-call-parser glm" },
+        { id: "toolCall", label: "Tool Call Parser", flag: "--tool-call-parser glm45" },
       ],
     },
   },

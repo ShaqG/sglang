@@ -302,11 +302,7 @@ def vsa_h3_block_sparse_attn_forward(
     return out
 
 
-# N_TILES follows the prompt length; specializing on its divisibility compiled
-# a new variant on the request path. It only offsets the pooled rows, which are
-# HEAD_DIM-aligned either way, so the vector accesses are unchanged. S_PAD is a
-# whole number of tiles, so its specialization never changes.
-@triton.jit(do_not_specialize=["N_TILES"])
+@triton.jit
 def _pack_tiles_kernel(
     Q,
     K,
@@ -432,11 +428,7 @@ def vsa_h3_pack_tiles(
     )
 
 
-# used and N_TILES follow the prompt length; specializing on their
-# divisibility compiled new variants on the request path. They bound the row
-# mask and index the compression rows, while the vector accesses run along
-# HEAD_DIM, so the arithmetic is unchanged.
-@triton.jit(do_not_specialize=["used", "N_TILES"])
+@triton.jit
 def _untile_kernel(
     OutTiled,
     Gate,
@@ -572,21 +564,7 @@ def vsa_h3_gate_add(
     )
 
 
-# The tile counts, the strides and the alignment of `out` (the lists from row
-# `prefix` on) follow the prompt length and duration; specializing on them
-# compiled a new variant on the request path. Only VIDEO_POW2 picks one now.
-# The kernel only moves int32 tile indices, so the lists are unchanged.
-@triton.jit(
-    do_not_specialize=[
-        "num_video_tiles",
-        "prefix",
-        "stride_mh",
-        "stride_mr",
-        "stride_oh",
-        "stride_or",
-    ],
-    do_not_specialize_on_alignment=["out_ptr"],
-)
+@triton.jit
 def _topk_lists_kernel(
     mask_ptr,
     out_ptr,

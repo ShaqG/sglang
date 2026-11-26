@@ -3,7 +3,7 @@
 Tests DeepSeek-V3.2 with Torch Compile configuration using few-shot
 completion benchmark on MI325/MI300X.
 
-Registry: nightly-accuracy-test-8-gpu-amd-deepseek-v32-tc suite
+Registry: nightly-amd-accuracy-8-gpu-deepseek-v32-tc suite
 """
 
 import os
@@ -26,9 +26,8 @@ from sglang.test.test_utils import (
 # Register for AMD CI - DeepSeek-V3.2 TC accuracy test
 register_amd_ci(
     est_time=7200,
-    suite="nightly-accuracy-test-8-gpu-amd-deepseek-v32-tc",
+    suite="nightly-amd-accuracy-8-gpu-deepseek-v32-tc",
     nightly=True,
-    disabled="Older model generation; AMD nightly keeps the latest two per family",
 )
 
 DEEPSEEK_V32_MODEL_PATH = "deepseek-ai/DeepSeek-V3.2"
@@ -60,8 +59,7 @@ class TestDeepseekV32TC(CustomTestCase):
             "--cuda-graph-max-bs-decode",
             "8",
             "--enable-torch-compile",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--model-loader-extra-config",
             '{"enable_multithread_load": true}',
             "--watchdog-timeout",

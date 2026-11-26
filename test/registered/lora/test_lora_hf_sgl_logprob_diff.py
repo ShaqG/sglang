@@ -34,7 +34,7 @@ register_cuda_ci(
 )
 register_amd_ci(
     est_time=90,
-    suite="nightly-test-1-gpu-amd",
+    suite="nightly-amd-1-gpu",
     nightly=True,
 )
 

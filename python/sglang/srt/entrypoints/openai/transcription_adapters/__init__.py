@@ -13,9 +13,6 @@ from sglang.srt.entrypoints.openai.transcription_adapters.glmasr import (  # noq
 from sglang.srt.entrypoints.openai.transcription_adapters.granite_speech import (  # noqa: F401
     GraniteSpeechAdapter,
 )
-from sglang.srt.entrypoints.openai.transcription_adapters.lfm3_audio import (  # noqa: F401
-    Lfm3AudioAdapter,
-)
 from sglang.srt.entrypoints.openai.transcription_adapters.mimo_v2_asr import (  # noqa: F401
     MiMoV2ASRAdapter,
 )
@@ -38,6 +35,5 @@ __all__ = [
     "MiMoV2ASRAdapter",
     "GraniteSpeechAdapter",
     "Qwen2AudioAdapter",
-    "Lfm3AudioAdapter",
     "GlmAsrAdapter",
 ]

@@ -29,8 +29,7 @@ class TestPureTP(CustomTestCase):
                 "2",
                 "--moe-a2a-backend",
                 "deepep",
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
             ],
         )
 
@@ -71,8 +70,7 @@ class TestDPAttn(unittest.TestCase):
                     "deepep",
                     "--deepep-mode",
                     "normal",
-                    "--disable-decode-cuda-graph",
-                    "--disable-prefill-cuda-graph",
+                    "--disable-cuda-graph",
                     # Test custom config
                     "--deepep-config",
                     json.dumps(

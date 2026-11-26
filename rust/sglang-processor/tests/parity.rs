@@ -36,9 +36,9 @@ fn check(fixture: &Value) {
     let model = fixture["model"].as_str().unwrap();
     let revision = fixture["revision"].as_str().unwrap();
     let default_formatter = formatter(model, fixture);
-    let tokenizers = cached_tokenizers(model, revision);
+    let tokenizer = cached_tokenizer(model, revision);
     // Formatters that encode their own prompts (DeepSeek) need the checkpoint's tokenizer.
-    let encoder = tokenizers.as_ref().and_then(|_| {
+    let encoder = tokenizer.as_ref().and_then(|_| {
         select_chat_formatter(&ChatFormatterOptions {
             tokenizer_path: model.into(),
             revision: Some(revision.into()),
@@ -55,7 +55,7 @@ fn check(fixture: &Value) {
         });
         let outcome = check_case(
             override_formatter.as_ref().unwrap_or(&default_formatter),
-            tokenizers.as_ref(),
+            tokenizer.as_ref(),
             encoder.as_ref(),
             &fixture["bos_token_id"],
             case,
@@ -73,7 +73,7 @@ fn check(fixture: &Value) {
 
 fn check_case(
     formatter: &ChatFormatter,
-    tokenizers: Option<&Tokenizers>,
+    tokenizer: Option<&Tokenizer>,
     encoder: Option<&ChatFormatter>,
     bos: &Value,
     case: &Value,
@@ -93,14 +93,14 @@ fn check_case(
     if text != case["prompt"] {
         return Err(format!("prompt differs: {text}"));
     }
-    let Some(tokenizers) = tokenizers else {
+    let Some(tokenizer) = tokenizer else {
         return Ok(());
     };
     let ids = match encoder
         .and_then(|encoder| encoder.encode_request(case["request"].clone(), &defaults))
     {
         Some(ids) => ids.map_err(|error| error.to_string())?,
-        None => encode(tokenizers, &prompt, &prefix, bos),
+        None => encode(tokenizer, &prompt, &prefix, bos),
     };
     let digest = ids.iter().fold(Sha256::new(), |hash, id| {
         hash.chain_update(id.to_le_bytes())
@@ -124,12 +124,7 @@ fn formatter(model: &str, fixture: &Value) -> ChatFormatter {
     std::fs::write(dir.join("config.json"), fixture["config"].to_string()).unwrap();
     if let Some(template) = fixture["chat_template"].as_str() {
         std::fs::write(dir.join("chat_template.jinja"), template).unwrap();
-        // The special tokens the template context carries.
-        let config = fixture
-            .get("special_tokens")
-            .cloned()
-            .unwrap_or(Value::Object(Default::default()));
-        std::fs::write(dir.join("tokenizer_config.json"), config.to_string()).unwrap();
+        std::fs::write(dir.join("tokenizer_config.json"), "{}").unwrap();
     }
     let (formatter, error) = select_chat_formatter(&ChatFormatterOptions {
         tokenizer_path: dir.to_string_lossy().into_owned(),
@@ -139,51 +134,30 @@ fn formatter(model: &str, fixture: &Value) -> ChatFormatter {
     formatter.unwrap_or_else(|| panic!("{model}: {error:?}"))
 }
 
-/// The pinned tokenizer without and with the special tokens it adds.
-struct Tokenizers {
-    plain: Tokenizer,
-    specials: Tokenizer,
-}
-
 /// The pinned tokenizer when it is in the HF cache; otherwise say token ids are skipped.
-fn cached_tokenizers(model: &str, revision: &str) -> Option<Tokenizers> {
+fn cached_tokenizer(model: &str, revision: &str) -> Option<Tokenizer> {
     let Some(file) = resolve_tokenizer_file(model, Some(revision)) else {
         eprintln!("{model}@{revision} is not in the HF cache: token ids not checked");
         return None;
     };
-    let load = |specials| load_tokenizer(Some(&file), None, specials).unwrap();
-    Some(Tokenizers {
-        plain: load(false),
-        specials: load(true),
-    })
+    Some(load_tokenizer(Some(&file), None, true).unwrap())
 }
 
-/// `serving_chat._render_and_encode_chat_template` encodes the prompt without the
-/// tokenizer's own special tokens; `_append_assistant_prefix_to_prompt_ids` encodes
-/// the continuation on its own, with them, minus a leading BOS. Segmented prompts
-/// (Kimi K3) allow special tokens only where the checkpoint's encoder does.
-fn encode(tokenizers: &Tokenizers, prompt: &RenderedPrompt, prefix: &str, bos: &Value) -> Vec<u32> {
+/// `serving_chat._append_assistant_prefix_to_prompt_ids`: the continuation is
+/// encoded on its own, minus a leading BOS. Segmented prompts (Kimi K3) allow
+/// special tokens only where the checkpoint's encoder does.
+fn encode(tokenizer: &Tokenizer, prompt: &RenderedPrompt, prefix: &str, bos: &Value) -> Vec<u32> {
+    let ids = |text: &str| tokenizer.encode(text).unwrap().token_ids().to_vec();
     let mut out = match prompt.encode_segments() {
-        Some(segments) => tokenizers
-            .plain
+        Some(segments) => tokenizer
             .encode_segments(&segments)
             .unwrap()
             .token_ids()
             .to_vec(),
-        None => tokenizers
-            .plain
-            .encode(prompt.as_str())
-            .unwrap()
-            .token_ids()
-            .to_vec(),
+        None => ids(prompt.as_str()),
     };
     if !prefix.is_empty() {
-        let suffix = tokenizers
-            .specials
-            .encode(prefix)
-            .unwrap()
-            .token_ids()
-            .to_vec();
+        let suffix = ids(prefix);
         let skip = usize::from(suffix.first().is_some_and(|&id| *bos == id));
         out.extend(&suffix[skip..]);
     }

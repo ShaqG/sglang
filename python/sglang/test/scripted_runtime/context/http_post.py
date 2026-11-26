@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
-from sglang.srt.utils.auth import bearer_auth_headers
-
 if TYPE_CHECKING:
     from sglang.test.scripted_runtime.context.api import ScriptedContext
 
@@ -47,9 +45,8 @@ def _submit_post(
 ) -> None:
     server_args = ctx.scheduler.server_args
     url = f"http://{server_args.host}:{server_args.port}{path}"
-    headers = bearer_auth_headers(server_args.admin_api_key)
 
     async def _post() -> None:
-        await ctx._http_poster.post(url, json, headers)
+        await ctx._http_poster.post(url, json)
 
     ctx._http_poster.submit_coro(_post())

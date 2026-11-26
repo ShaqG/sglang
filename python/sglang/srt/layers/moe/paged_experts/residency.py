@@ -8,7 +8,7 @@ host-planned steps load that state into the policy and store it back.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import AbstractSet, List, Tuple
+from typing import List, Tuple
 
 import msgspec
 import torch
@@ -46,22 +46,15 @@ class LRUPolicy:
         )
 
 
-def plan_waves(
-    policy: LRUPolicy, distinct: List[int], in_host_rows: AbstractSet[int] = frozenset()
-) -> List[Wave]:
-    """Split a step's distinct experts into waves of at most ``num_slots`` and place each:
-    the resident experts first, then those in host rows (``in_host_rows``, with a store that
-    also reads experts from disk), then the rest, so a disk read never evicts a host row a
-    later wave of the step still needs.
+def plan_waves(policy: LRUPolicy, distinct: List[int]) -> List[Wave]:
+    """Split a step's distinct experts into waves of at most ``num_slots`` and place each.
 
     A step with no routed expert (all padding) still gets one empty wave, so the layer runs.
     """
     k = policy.num_slots
-    ordered = (
-        [e for e in distinct if e in policy.resident]
-        + [e for e in distinct if e not in policy.resident and e in in_host_rows]
-        + [e for e in distinct if e not in policy.resident and e not in in_host_rows]
-    )
+    ordered = [e for e in distinct if e in policy.resident] + [
+        e for e in distinct if e not in policy.resident
+    ]
     groups = [ordered[i : i + k] for i in range(0, len(ordered), k)] or [[]]
     return [policy.place(group) for group in groups]
 
@@ -81,8 +74,6 @@ class DeviceResidency:
         self.dst = torch.zeros(num_slots, **i32)
         self.count = torch.zeros(1, **i32)
         self._step = 0  # the step the last ``load_into`` read
-        # An event after a pre-copy into this layer (``precopy``), which its next step waits for.
-        self.precopy_join = None
 
     def load_into(self, policy: LRUPolicy, counts: torch.Tensor) -> List[int]:
         """Make ``policy`` hold this state: the same residents, least recently used first. The

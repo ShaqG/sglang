@@ -3,7 +3,7 @@
 //! overrides the body field of the same name before the body is decoded.
 
 use axum::http::HeaderMap;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[derive(Clone, Copy)]
 enum Kind {
@@ -28,52 +28,30 @@ const HEADER_OVERRIDES: &[(&str, &str, Kind)] = &[
     ("x-override-priority", "priority", Kind::Int),
 ];
 
-/// Write each present override header into `body` and return the fields
-/// written, in that order. An unparsable value fails the request (Python
-/// answers 400). A non-object body is left alone; decoding rejects it.
-pub(super) fn apply_header_overrides(
-    body: &mut Value,
-    headers: &HeaderMap,
-) -> Result<Map<String, Value>, String> {
-    let mut applied = Map::new();
+/// Write each present override header into `body`. An unparsable value fails
+/// the request (Python answers 400). A non-object body is left alone; decoding
+/// rejects it.
+pub(super) fn apply_header_overrides(body: &mut Value, headers: &HeaderMap) -> Result<(), String> {
     let Some(fields) = body.as_object_mut() else {
-        return Ok(applied);
+        return Ok(());
     };
     for &(header, field, kind) in HEADER_OVERRIDES {
-        let value = match kind {
-            Kind::Str => str_header(headers, header)?.map(Value::from),
-            Kind::Int => int_header(headers, header)?.map(Value::from),
-        };
-        let Some(value) = value else {
+        let Some(value) = headers.get(header) else {
             continue;
         };
-        fields.insert(field.to_owned(), value.clone());
-        applied.insert(field.to_owned(), value);
+        let text = value
+            .to_str()
+            .map_err(|_| format!("invalid {header} header: not visible ASCII"))?;
+        let value = match kind {
+            Kind::Str => Value::from(text),
+            Kind::Int => text
+                .parse::<i64>()
+                .map(Value::from)
+                .map_err(|e| format!("invalid {header} header {text:?}: {e}"))?,
+        };
+        fields.insert(field.to_owned(), value);
     }
-    Ok(applied)
-}
-
-/// Override header `name`'s text, `None` when absent.
-fn str_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, String> {
-    headers
-        .get(name)
-        .map(|value| {
-            value
-                .to_str()
-                .map_err(|_| format!("invalid {name} header: not visible ASCII"))
-        })
-        .transpose()
-}
-
-/// Integer override header `name`, `None` when absent; an unparsable value
-/// is Python's 400.
-pub(super) fn int_header(headers: &HeaderMap, name: &str) -> Result<Option<i64>, String> {
-    str_header(headers, name)?
-        .map(|text| {
-            text.parse()
-                .map_err(|e| format!("invalid {name} header {text:?}: {e}"))
-        })
-        .transpose()
+    Ok(())
 }
 
 #[cfg(test)]
@@ -94,7 +72,7 @@ mod tests {
     #[test]
     fn headers_override_body_fields() {
         let mut body = serde_json::json!({"text": "hi", "rid": "client", "routed_dp_rank": 0});
-        let applied = apply_header_overrides(
+        apply_header_overrides(
             &mut body,
             &headers(&[
                 ("x-override-rid", "router"),
@@ -117,12 +95,6 @@ mod tests {
                 "disagg_prefill_dp_rank": 1, "priority": -2,
             })
         );
-        // What was written: a crash dump writes it into the received body
-        // again, and must get the same JSON, key order included.
-        let mut overridden =
-            serde_json::json!({"text": "hi", "rid": "client", "routed_dp_rank": 0});
-        overridden.as_object_mut().unwrap().extend(applied);
-        assert_eq!(overridden.to_string(), body.to_string());
         let (requests, _) = into_requests(
             serde_json::from_value(body.clone()).unwrap(),
             &GenerationPolicy::default(),

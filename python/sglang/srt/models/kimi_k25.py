@@ -620,6 +620,7 @@ class K2VLMultiModalProjector(nn.Module):
         return hidden_states
 
 
+@torch.inference_mode()
 def mm_projection_auto(
     mm_projector: torch.nn.Module,
     vt_output: Sequence[torch.Tensor],

@@ -26,8 +26,7 @@ class TestVLMModels(CustomTestCase):
         "info",
         "--attention-backend",
         "ascend",
-        "--disable-decode-cuda-graph",
-        "--disable-prefill-cuda-graph",
+        "--disable-cuda-graph",
         "--tp-size",
         4,
     ]

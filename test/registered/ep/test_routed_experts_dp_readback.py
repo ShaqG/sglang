@@ -76,8 +76,7 @@ class _ReadbackMixin:
             "--ep",
             "2",
             "--enable-return-routed-experts",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--disable-radix-cache",
             # Keep the startup budget within the test's 256-token buffer.
             "--chunked-prefill-size",

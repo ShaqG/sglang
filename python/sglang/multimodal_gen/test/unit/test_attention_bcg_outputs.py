@@ -46,10 +46,9 @@ class TestAttentionBCGOutputs(unittest.TestCase):
     def _capture_and_replay(self, attention, *args, **kwargs):
         graph = bcg.BreakableCUDAGraph()
         capture = SimpleNamespace(
-            end_current_segment=lambda: None,
-            begin_next_segment=lambda: None,
-            register_eager_call=graph._break_fns.append,
-            retain_for_replay=lambda value: value,
+            cuda_graph=graph,
+            _end_current_segment=lambda: None,
+            _begin_new_segment=lambda: None,
         )
         with (
             patch.object(layer, "is_in_breakable_cuda_graph", return_value=True),
@@ -65,8 +64,11 @@ class TestAttentionBCGOutputs(unittest.TestCase):
             ),
             patch.object(layer, "sequence_model_parallel_all_gather", lambda x, **_: x),
         ):
-            with bcg.use_breakable_capture_recorder(capture):
+            token = bcg._current_capture_var.set(capture)
+            try:
                 captured = attention(*args, **kwargs)
+            finally:
+                bcg._current_capture_var.reset(token)
             self.assertEqual(len(graph._break_fns), 1)
             self.assertIsNone(graph._break_fns[0]())
         return captured

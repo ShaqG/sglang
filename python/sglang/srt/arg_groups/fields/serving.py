@@ -72,16 +72,21 @@ class Serving(msgspec.Struct):
         bool,
         "Give each Uvicorn HTTP worker its own SO_REUSEPORT listener.",
     ] = False
-    grpc_mode: A[
+    smg_grpc_mode: A[
         bool,
-        "Serve the encoder over gRPC on --port instead of HTTP. Requires "
-        "--encoder-only.",
+        "Use the legacy SMG gRPC server (smg-grpc-servicer) instead of the HTTP "
+        "server. Replaces the deprecated --grpc-mode.",
+    ] = False
+    grpc_mode: A[
+        bool, "(Deprecated, use --smg-grpc-mode) Legacy SMG gRPC server selector."
     ] = False
     grpc_port: A[
         Optional[int],
         "Port for the native gRPC server, started alongside HTTP. Setting this "
         "(or SGLANG_GRPC_PORT) enables the native gRPC server; it is off by "
-        "default. Follower nodes expose GetServerInfo only.",
+        "default. Follower nodes expose GetServerInfo only. "
+        "In legacy --smg-grpc-mode this is the SMG server port and "
+        "defaults to --port + 10000.",
     ] = None
     grpc_response_timeout_secs: A[
         int,
@@ -115,7 +120,7 @@ class Serving(msgspec.Struct):
     ] = None
     enable_http2: A[
         bool,
-        "Serve HTTP/2 alongside HTTP/1.1 on the same port: clients may use h2c (cleartext HTTP/2) or plain HTTP/1.1. The Python frontend switches from Uvicorn to Granian and requires 'pip install sglang[http2]'; the Rust frontend (SGLANG_RUST_SERVER=1) serves it natively.",
+        "Use Granian instead of Uvicorn as the ASGI server, enabling HTTP/1.1 and HTTP/2 auto-negotiation. Clients may use h2c (cleartext HTTP/2) or plain HTTP/1.1. Requires 'pip install sglang[http2]'.",
     ] = False
     http2_max_concurrent_streams: A[
         int,
@@ -158,7 +163,7 @@ class Serving(msgspec.Struct):
     ] = None
     admin_api_key: A[
         Optional[str],
-        "Set admin API key for management endpoints. Sensitive ones (e.g. weight updates, LoRA loading, profiling, /hicache/storage-backend) are refused unless it is set. When set, admin endpoints require this key and do NOT accept --api-key. Defaults to SGLANG_ADMIN_API_KEY, which the bundled clients also read.",
+        "Set admin API key for sensitive management endpoints (e.g. /hicache/storage-backend/clear). When set, admin endpoints require this key and do NOT accept --api-key.",
     ] = None
     served_model_name: A[
         Optional[str],
@@ -200,7 +205,7 @@ class Serving(msgspec.Struct):
         bool,
         "Return sampled output token ids on the response-level sglext extension for every chat completion request, as if return_output_ids_in_sglext were set on the request.",
     ] = False
-    reasoning_parser: A[Optional[str], Arg(no_cli=True, resolvable=True)] = None
+    reasoning_parser: Optional[str] = None
     default_chat_template_kwargs: A[
         Optional[Dict[str, Any]],
         Arg(
@@ -219,7 +224,7 @@ class Serving(msgspec.Struct):
         bool,
         "Enable strict token filtering during the thinking phase. Blocks model-specific excluded tokens (e.g., tool call markers) during reasoning. Requires a grammar backend that supports token filtering.",
     ] = False
-    tool_call_parser: A[Optional[str], Arg(no_cli=True, resolvable=True)] = None
+    tool_call_parser: Optional[str] = None
     tool_server: A[
         Optional[str],
         "Either 'demo' or a comma-separated list of tool server urls to use for the model. If not specified, no tool server will be used.",

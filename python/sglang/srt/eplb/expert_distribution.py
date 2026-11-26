@@ -40,7 +40,6 @@ import torch.distributed
 
 from sglang.kernels.ops.moe.eplb_map_record import record_physical_counts
 from sglang.srt.environ import envs
-from sglang.srt.eplb.expert_location import get_eplb_group
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_executor.forward_mode import ForwardMode
 from sglang.srt.observability.metrics_collector import (
@@ -142,10 +141,10 @@ class ExpertDistributionRecorder(ABC):
     ):
         if get_exec().moe.expert_distribution_recorder_mode is not None:
             assert expert_location_metadata is not None, (
-                "ExpertLocationMetadata is required for expert distribution recording. One possible "
-                "reason is that you are using a model that does not support expert distribution "
-                "recording. Try setting `get_model_config_for_expert_location` in your model."
+                "ExpertLocationMetadata is required for expert distribution recording. One possible"
             )
+            "reason is that you are using a model that does not support expert distribution"
+            "recording. Try setting `get_model_config_for_expert_location` in your model."
             return _ExpertDistributionRecorderReal(expert_location_metadata, rank)
         else:
             return _ExpertDistributionRecorderNoop()
@@ -781,7 +780,6 @@ class _Accumulator(ABC):
     ):
         self._expert_location_metadata = expert_location_metadata
         self._rank = rank
-        self._communication_group = get_eplb_group()
 
     def get_single_pass_gatherer_keys(self):
         return [_SINGLE_PASS_GATHERER_KEY_PRIMARY]
@@ -856,10 +854,7 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
         )
         gpu_physical_count = gpu_physical_count.to(get_device_namespace().device)
         torch.distributed.reduce(
-            gpu_physical_count,
-            dst=0,
-            op=torch.distributed.ReduceOp.SUM,
-            group=self._communication_group,
+            gpu_physical_count, dst=0, op=torch.distributed.ReduceOp.SUM
         )
 
         if self._rank == 0:
@@ -932,6 +927,12 @@ class _DetailAccumulator(_UtilizationRateAccumulatorMixin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._records = []
+
+    def get_single_pass_gatherer_keys(self):
+        return super().get_single_pass_gatherer_keys()
+
+    def get_single_pass_gatherer_key(self, debug_name: Optional[str]):
+        return super().get_single_pass_gatherer_key(debug_name)
 
     def append(
         self,
@@ -1021,9 +1022,7 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
             torch.get_device_module().empty_cache()
 
         torch.distributed.all_reduce(
-            logical_count_of_buffered_step,
-            op=torch.distributed.ReduceOp.SUM,
-            group=self._communication_group,
+            logical_count_of_buffered_step, op=torch.distributed.ReduceOp.SUM
         )
 
         output = dict(
@@ -1066,9 +1065,7 @@ class _StatAccumulator(_UtilizationRateAccumulatorMixin):
                 dtype=torch.float32,
                 device=get_device_namespace().device,
             )
-        torch.distributed.broadcast(
-            avg_rate_tensor, src=0, group=self._communication_group
-        )
+        torch.distributed.broadcast(avg_rate_tensor, src=0)
         return avg_rate_tensor.item()
 
 

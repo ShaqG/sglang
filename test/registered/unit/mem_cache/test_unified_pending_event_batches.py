@@ -99,16 +99,14 @@ class TestUnifiedPendingEventBatches(CustomTestCase):
                     all_sources = set()
 
                     def assert_pending():
-                        self.assertEqual(
-                            set(member.usage.pending_by_key()), set(expected)
-                        )
+                        self.assertEqual(set(member._pending_reuse), set(expected))
                         union = set().union(*expected.values()) if expected else set()
-                        self.assertEqual(member.usage.pending_pages, union)
+                        self.assertEqual(member._pending_reuse_pages_cpu, union)
                         free = member._free_phys_pages.tolist()
                         self.assertTrue(union.isdisjoint(free))
                         self.assertEqual(len(free), len(set(free)))
                         for event, sources in expected.items():
-                            cpu, device = member.usage.pending_by_key()[event]
+                            cpu, device = member._pending_reuse[event]
                             self.assertEqual(set(cpu), sources)
                             self.assertEqual(len(cpu), len(sources))
                             self.assertEqual(torch.cat(device).tolist(), cpu)
@@ -130,7 +128,6 @@ class TestUnifiedPendingEventBatches(CustomTestCase):
                         event = second if mode == "different" and index else first
                         if index and mode == "fired_between":
                             first.fired = True
-                            member.retire_forward(first)
                             expected.clear()
                         member.set_latest_forward_done_event(event)
                         member.set_inflight_forward(event, None)
@@ -162,23 +159,21 @@ class TestUnifiedPendingEventBatches(CustomTestCase):
                         sources = set(before[moved].tolist())
                         self.assertTrue(sources)
                         all_sources.update(sources)
-                        if not member.usage.forward_retired(event):
+                        if not event.fired:
                             expected.setdefault(event, set()).update(sources)
                         assert_pending()
                         assert_payload()
 
                     member._drain_pending_reuse(urgent=False)
                     assert_pending()
-                    # Forwards retire in launch order, each with every earlier one.
-                    for event in (first, second):
+                    for event in (second, first):
                         event.fired = True
-                        member.retire_forward(event)
                         expected.pop(event, None)
                         member._drain_pending_reuse(urgent=False)
                         assert_pending()
                         assert_payload()
-                    self.assertFalse(member.usage.pending_by_key())
-                    self.assertFalse(member.usage.pending_pages)
+                    self.assertFalse(member._pending_reuse)
+                    self.assertFalse(member._pending_reuse_pages_cpu)
                     if mode != "fired_between":
                         self.assertEqual(
                             set(member._free_phys_pages.tolist()), all_sources

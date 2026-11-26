@@ -22,7 +22,6 @@ from sglang.lang.ir import (
     REGEX_STR,
     SglSamplingParams,
 )
-from sglang.srt.environ import envs
 from sglang.utils import http_request
 
 
@@ -33,13 +32,12 @@ class RuntimeEndpoint(BaseBackend):
         api_key: Optional[str] = None,
         verify: Optional[str] = None,
         chat_template_name: Optional[str] = None,
-        admin_api_key: Optional[str] = None,
     ):
         super().__init__()
+        self.support_concate_and_append = True
 
         self.base_url = base_url
         self.api_key = api_key
-        self.admin_api_key = admin_api_key or envs.SGLANG_ADMIN_API_KEY.get()
         self.verify = verify
 
         res = http_request(
@@ -63,7 +61,7 @@ class RuntimeEndpoint(BaseBackend):
     def flush_cache(self):
         res = http_request(
             self.base_url + "/flush_cache",
-            api_key=self.admin_api_key or self.api_key,
+            api_key=self.api_key,
             verify=self.verify,
             method="POST",
         )
@@ -90,11 +88,10 @@ class RuntimeEndpoint(BaseBackend):
         )
         self._assert_success(res)
 
-    def start_profile(self, **kwargs):
+    def start_profile(self):
         res = http_request(
             self.base_url + "/start_profile",
-            json=kwargs or None,
-            api_key=self.admin_api_key or self.api_key,
+            api_key=self.api_key,
             verify=self.verify,
         )
         self._assert_success(res)
@@ -102,7 +99,7 @@ class RuntimeEndpoint(BaseBackend):
     def stop_profile(self):
         res = http_request(
             self.base_url + "/stop_profile",
-            api_key=self.admin_api_key or self.api_key,
+            api_key=self.api_key,
             verify=self.verify,
         )
         self._assert_success(res)
@@ -375,7 +372,7 @@ class Runtime:
 
         Args:
             log_level: Log level for the server.
-            launch_timeout: Timeout in seconds for waiting for the server to start.
+            timeout: Timeout in seconds for waiting for the server to start.
             *args: Additional arguments passed to ServerArgs.
             **kwargs: Additional keyword arguments passed to ServerArgs.
         """
@@ -443,11 +440,7 @@ class Runtime:
                 self.shutdown()
                 raise TimeoutError("Server failed to start within the timeout period.")
 
-        self.endpoint = RuntimeEndpoint(
-            self.url,
-            api_key=self.server_args.api_key,
-            admin_api_key=self.server_args.admin_api_key,
-        )
+        self.endpoint = RuntimeEndpoint(self.url)
 
     def shutdown(self):
         from sglang.srt.utils import kill_process_tree
@@ -458,8 +451,8 @@ class Runtime:
             kill_process_tree(self.pid, wait_timeout=None)
             self.pid = None
 
-    def start_profile(self, **kwargs):
-        self.endpoint.start_profile(**kwargs)
+    def start_profile(self):
+        self.endpoint.start_profile()
 
     def stop_profile(self):
         self.endpoint.stop_profile()
@@ -504,17 +497,12 @@ class Runtime:
         timeout = aiohttp.ClientTimeout(total=3 * 3600)
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             async with session.post(self.generate_url, json=json_data) as response:
-                # A chunk can hold several events, or part of one.
-                buffer = b""
                 async for chunk, _ in response.content.iter_chunks():
-                    *events, buffer = (buffer + chunk).split(b"\n\n")
-                    for event in events:
-                        event = event.decode("utf-8")
-                        if not event.startswith("data:"):
-                            continue
-                        if event == "data: [DONE]":
-                            return
-                        data = json.loads(event[5:])
+                    chunk = chunk.decode("utf-8")
+                    if chunk and chunk.startswith("data:"):
+                        if chunk == "data: [DONE]\n\n":
+                            break
+                        data = json.loads(chunk[5:].strip("\n"))
                         if "text" in data:
                             cur = data["text"][pos:]
                             if cur:

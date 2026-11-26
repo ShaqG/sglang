@@ -28,9 +28,11 @@ def _jit_causal_conv1d_module(dtype: torch.dtype) -> Module:
     # precise-math build for every other arch; match that split so the SiLU
     # epilogue keeps producing the same bits as the op being replaced.
     use_fast_math = current_arch().is_sm(9, 0)
-    args = make_cpp_args(dtype, use_fast_math)
+    math_mode = "fast_math" if use_fast_math else "precise_math"
+    args = make_cpp_args(dtype)
     return load_jit(
         "causal_conv1d",
+        math_mode,
         *args,
         cuda_files=["mamba/causal_conv1d.cuh"],
         cuda_wrappers=[

@@ -355,6 +355,13 @@ class DeepseekVLV2Processor(ProcessorMixin):
 
         return prepare
 
+    def find_all_indices(self, messages, target_value):
+        indices = []
+        for index, item in enumerate(messages):
+            if item == target_value:
+                indices.append(index)
+        return indices
+
     def tokenize_with_images(
         self,
         conversation: str,

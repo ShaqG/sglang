@@ -28,8 +28,6 @@ for _ in (
     "sgl_kernel_npu",
     "sgl_kernel_npu.attention",
     "sgl_kernel_npu.attention.sinks_attention",
-    "sgl_kernel_npu.operators",
-    "sgl_kernel_npu.operators.attention",
     "sglang.srt.speculative",
     "sglang.srt.speculative.decoupled_spec_io",
     "sglang.srt.speculative.spec_info",
@@ -58,7 +56,7 @@ class _RecordingStrategy:
         self.cp_size = cp_size
         self.kv_calls = []
 
-    def materialize_full_kv(self, forward_batch, layer, k, v, window_locs=None):
+    def materialize_full_kv(self, forward_batch, layer, k, v, swa_loc=None):
         self.kv_calls.append((tuple(k.shape), tuple(v.shape)))
 
 
@@ -95,7 +93,7 @@ class TestCPKVWrite(unittest.TestCase):
         pool = _RecordingPool()
         with patch.object(ascend_backend, "get_cp_strategy", return_value=strategy):
             _cp_allgather_and_save_kv_npu(
-                self.batch, self.layer, self.k, self.v, 2, pool, window_locs=None
+                self.batch, self.layer, self.k, self.v, 2, pool, swa_loc=None
             )
         self.assertEqual(len(strategy.kv_calls), 1)
         self.assertEqual(strategy.kv_calls[0], ((3, 8, 128), (3, 8, 128)))
@@ -107,7 +105,7 @@ class TestCPKVWrite(unittest.TestCase):
         pool = _RecordingPool()
         with patch.object(ascend_backend, "get_cp_strategy", return_value=strategy):
             _cp_allgather_and_save_kv_npu(
-                self.batch, self.layer, self.k, self.v, 1, pool, window_locs=None
+                self.batch, self.layer, self.k, self.v, 1, pool, swa_loc=None
             )
         self.assertEqual(strategy.kv_calls, [])
         self.assertEqual(pool.calls, [((3, 8, 128), (3, 8, 128))])

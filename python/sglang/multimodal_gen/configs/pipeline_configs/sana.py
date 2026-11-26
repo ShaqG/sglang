@@ -48,10 +48,7 @@ class SanaPipelineConfig(SpatialImagePipelineConfig):
     should_use_guidance: bool = False
     enable_autocast: bool = False
 
-    # Tiled decode is supported (--vae-tiling) but kept off by default: DC-AE
-    # is a 32x-compression autoencoder and tile seam quality / the benefit of
-    # diffusers' default 512 tile have not been validated. SP VAE decode is
-    # not supported.
+    # DC-AE does not support tiling or SP VAE decode yet.
     vae_tiling: bool = False
     vae_sp: bool = False
     vae_precision: str = "fp32"

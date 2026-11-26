@@ -131,8 +131,7 @@ class TestWhisperNoCudaGraph(CustomTestCase):
             other_args=[
                 "--served-model-name",
                 "whisper",
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
             ],
         )
 

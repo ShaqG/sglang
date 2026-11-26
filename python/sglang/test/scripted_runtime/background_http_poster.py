@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 from concurrent.futures import Future
-from typing import Any, Coroutine, Dict, Optional
+from typing import Any, Coroutine, Optional
 
 import aiohttp
 
@@ -39,11 +39,9 @@ class BackgroundHttpPoster:
         except Exception:
             logger.exception("scripted_runtime: background async coroutine failed")
 
-    async def post(
-        self, url: str, json: Any, headers: Optional[Dict[str, str]] = None
-    ) -> None:
+    async def post(self, url: str, json: Any) -> None:
         session = self._ensure_session()
-        async with session.post(url, json=json, headers=headers) as resp:
+        async with session.post(url, json=json) as resp:
             await resp.read()
 
     def _ensure_session(self) -> aiohttp.ClientSession:

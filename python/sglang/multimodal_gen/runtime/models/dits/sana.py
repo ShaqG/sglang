@@ -50,8 +50,6 @@ def sana_ln_modulate(
     x: torch.Tensor,
     scale: torch.Tensor,
     shift: torch.Tensor,
-    *,
-    allow_eager: bool = False,
 ) -> torch.Tensor:
     """Single-kernel ``LN(x) * (1 + scale) + shift``, bit-exact vs eager.
 
@@ -60,13 +58,12 @@ def sana_ln_modulate(
     chain (bit-exactness depends on which LayerNorm kernel aten dispatches
     to); any mismatch disables the fast path permanently.
 
-    The fusion defaults to CUDA-graph contexts (stream capture, or the
+    The fusion only engages in CUDA-graph contexts (stream capture, or the
     non-default stream the breakable-CUDA-graph runner warms up and captures
     on, #33989), where replay pays no Python launch cost.  Sana's eager mode
     is CPU-launch bound and one Triton launch costs more Python than the
     whole aten chain it replaces (+14% forward wall), so default-stream
-    serving keeps the eager chain. SANA-Video opts into eager inference for
-    its larger activations.
+    serving keeps the eager chain.
 
     ``x`` reaches every site transposed (patch-embed / GLUMBConv permute
     layout); aten's LayerNorm contiguizes internally, and the fast path
@@ -74,10 +71,13 @@ def sana_ln_modulate(
     """
     global _SANA_LN_MOD_DISABLED
 
-    if _SANA_LN_MOD_DISABLED or not _use_sana_bcg_fast_path(x, allow_eager=allow_eager):
+    if _SANA_LN_MOD_DISABLED or torch.compiler.is_compiling() or not x.is_cuda:
         return _eager_ln_modulate(norm, x, scale, shift)
 
     capturing = torch.cuda.is_current_stream_capturing()
+    if not capturing and torch.cuda.current_stream() == torch.cuda.default_stream():
+        return _eager_ln_modulate(norm, x, scale, shift)
+
     sig = (
         x.shape,
         x.stride(),

@@ -67,7 +67,8 @@ def world_size():
     publish_build_topology(
         world_rank=rank,
         tp_size=world_size,
-        attn_dp_size=world_size,
+        dp_size=world_size,
+        enable_dp_attention=True,
         ep_size=world_size,
         moe_runner_backend="flashinfer_cutlass",
         quantization="modelopt_fp4",

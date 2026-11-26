@@ -3,7 +3,6 @@
 import unittest
 from array import array
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -54,10 +53,6 @@ class _RecordingAllocator(SWATokenToKVPoolAllocator):
 class _Sender:
     """Transfers remain in flight until the test explicitly retires them."""
 
-    # No transfer engine: a page move waits for nothing of these sends.
-    kv_mgr = None
-    bootstrap_room = 0
-
     def __init__(self):
         self.in_flight = set()
         self.sends = []
@@ -84,17 +79,13 @@ def _scheduler(cache, allocator, pool):
     scheduler.kv_checksum_computer = None
     scheduler.disagg_metadata_buffers = SimpleNamespace(set_buf=lambda req: None)
     scheduler.disagg_prefill_bootstrap_queue = SimpleNamespace(
-        kv_manager=SimpleNamespace(
-            kv_args=SimpleNamespace(state_types=[], state_sub_pools=[])
-        )
+        kv_manager=SimpleNamespace(kv_args=SimpleNamespace(state_types=[]))
     )
     scheduler.disagg_prefill_pending_chunk_rids = set()
     return scheduler
 
 
-def _drive(
-    backend, chunk_ends, *, sibling, swa_size=128, unpublished=False, skip_insert=False
-):
+def _drive(backend, chunk_ends, *, sibling, swa_size=128):
     pool = ReqToTokenPool(
         size=4, max_context_len=128, device="cpu", enable_memory_saver=False
     )
@@ -146,7 +137,7 @@ def _drive(
         MatchPrefixParams(key=RadixKey(array("q", prefix)))
     ).last_device_node
     held = cache.lock(base)
-    cache.evict(EvictParams(window_num_tokens={"swa": len(old_suffix)}))
+    cache.evict(EvictParams(swa_num_tokens=len(old_suffix)))
     cache.unlock(held)
 
     tokens = prefix + old_suffix[:8] + list(range(200, 208))
@@ -163,8 +154,6 @@ def _drive(
     req.extend_end = len(prefix)
     req.lock = cache.lock(req.last_node)
     req.disagg_kv_sender = sender = _Sender()
-    req.pending_bootstrap = unpublished
-    req.skip_radix_cache_insert = skip_insert
     scheduler = _scheduler(cache, allocator, pool)
     scheduler.chunked_req = req
     running = SimpleNamespace(batch_is_full=True)
@@ -176,11 +165,11 @@ def _drive(
             insert(tokens[:20])
         need = end - req.extend_end
         available = allocator.swa_available_size()
-        assert available + cache.window_evictable_size("swa") >= need, (
+        assert available + cache.swa_evictable_size() >= need, (
             f"prefill stalled at {req.extend_end}, protected={req.kv.cache_protected_len}"
         )
         if available < need:
-            cache.evict(EvictParams(window_num_tokens={"swa": need - available}))
+            cache.evict(EvictParams(swa_num_tokens=need - available))
         sent_before = req.start_send_idx
         row_before = row[:sent_before].clone()
         in_flight = set(sender.in_flight)
@@ -190,9 +179,7 @@ def _drive(
         )
         req.kv.set_row_len(end)
         req.extend_end = end
-        if unpublished:
-            scheduler.checkpoint_disagg_prefill(req)
-        elif end < len(tokens):
+        if end < len(tokens):
             scheduler.process_prefill_chunk(last_batch=None, running_batch=running)
         else:
             scheduler.checkpoint_disagg_prefill(req)
@@ -204,20 +191,12 @@ def _drive(
                 remapped=not torch.equal(row[:sent_before], row_before),
                 protected=req.kv.cache_protected_len,
                 sent=req.start_send_idx,
-                swa_evicted=req.kv.get_evicted_seqlen("swa"),
-                branch_hit=(
-                    cache.match_prefix(
-                        MatchPrefixParams(key=RadixKey(array("q", tokens[:12])))
-                    ).device_prefix_len
-                    if unpublished
-                    else None
-                ),
+                swa_evicted=req.kv.get_evicted_seqlen(ComponentType.SWA),
             )
         )
 
     sender.in_flight.clear()
     release_kv_cache(req, cache, checkpoint=False)
-    cache.sanity_check()
     return steps
 
 
@@ -255,40 +234,6 @@ class TestPrefillSendProtection(CustomTestCase):
                 self.assertEqual(evicted, sorted(evicted))
                 self.assertGreater(evicted[-1], evicted[0])
 
-    def test_unpublished_branch_keeps_releasing_swa(self):
-        ends = tuple(range(20, 125, 8))
-        for backend in ("python", "rust"):
-            with (
-                self.subTest(backend=backend),
-                get_context().override_server_args(page_size=1),
-                envs.SGLANG_OPT_UNIFIED_CACHE_FREE_OUT_OF_WINDOW_SLOTS.override(True),
-                patch(
-                    "sglang.srt.disaggregation.prefill._uses_write_through_cache",
-                    return_value=True,
-                ),
-            ):
-                published = _drive(
-                    backend, ends, sibling=False, swa_size=40, unpublished=True
-                )
-                barred = _drive(
-                    backend,
-                    ends,
-                    sibling=False,
-                    swa_size=40,
-                    unpublished=True,
-                    skip_insert=True,
-                )
-                for steps in (published, barred):
-                    self.assertEqual(
-                        [s.swa_evicted for s in steps], [e - 5 for e in ends]
-                    )
-                self.assertEqual(
-                    {(s.protected, s.branch_hit) for s in published}, {(12, 12)}
-                )
-                self.assertEqual(
-                    {(s.protected, s.branch_hit) for s in barred}, {(4, 4)}
-                )
-
     def test_send_boundaries(self):
         # end, final, sharing, skip_insert, protected, start, staging, expected
         cases = [
@@ -322,12 +267,7 @@ class TestPrefillSendProtection(CustomTestCase):
                 scheduler = _scheduler(
                     SimpleNamespace(supports_prefix_sharing=lambda: sharing),
                     SimpleNamespace(
-                        page_size=4,
-                        translate_kv_indices_for_transfer=lambda x: x,
-                        # A pool whose rows never move records no transfer.
-                        storage=SimpleNamespace(
-                            record_network_transfer=lambda *args, **kwargs: None
-                        ),
+                        page_size=4, translate_kv_indices_for_transfer=lambda x: x
                     ),
                     SimpleNamespace(req_to_token=torch.arange(32).reshape(1, -1)),
                 )

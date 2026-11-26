@@ -167,8 +167,7 @@ class StageDedupMixin:
                     str(value.dtype),
                     tuple(value.detach().cpu().reshape(-1).tolist()),
                 )
-            # Too large to compare by content: only the same object dedups.
-            return ("tensor", id(value))
+            return ("tensor", tuple(value.shape), str(value.dtype), value.device.type)
         if isinstance(value, dict):
             return tuple(
                 sorted(

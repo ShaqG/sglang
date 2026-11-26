@@ -15,7 +15,7 @@ from sglang.test.test_utils import (
 
 register_npu_ci(
     est_time=400,
-    suite="full-test-2-npu-a3",
+    suite="full-2-npu-a3",
     nightly=True,
 )
 
@@ -35,8 +35,7 @@ class TestEnableThinking(CustomTestCase):
         cls.other_args = [
             "--attention-backend",
             "ascend",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--mem-fraction-static",
             0.95,
             "--tp",

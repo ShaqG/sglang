@@ -81,6 +81,10 @@ class Ngram {
     match_state_.clear();
   }
 
+  const Param& param() const {
+    return param_;
+  }
+
  private:
   void insertWorker();
 };

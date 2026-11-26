@@ -482,6 +482,10 @@ class VerificationResult:
 
         return "Validation failures:" + "".join(summary_parts)
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary for backward compatibility."""
+        return self._checks.copy()
+
 
 # Alias for convenience
 V = StageValidators

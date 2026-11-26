@@ -781,7 +781,7 @@ class TestToolChoiceQwen25(TestToolChoiceLlama32):
             api_key=cls.api_key,
             other_args=[
                 "--tool-call-parser",
-                "qwen",
+                "qwen25",
             ],
         )
         cls.base_url += "/v1"
@@ -850,7 +850,7 @@ class TestToolChoiceMistral(TestToolChoiceLlama32):
 #             other_args=[
 #                 # If your server needs extra parameters to test function calling, please add them here.
 #                 "--tool-call-parser",
-#                 "glm",
+#                 "glm45",
 #                 "--reasoning-parser",
 #                 "glm45",
 #                 "--tp-size",

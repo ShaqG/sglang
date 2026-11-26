@@ -31,22 +31,17 @@ from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.managers.scheduler_components.request_list import (
     IndexedReqList,
     ListKind,
-    move,
 )
 from sglang.srt.mem_cache.base_prefix_cache import (
     CacheRequestHandle,
     CacheRequestOutcome,
 )
-from sglang.test.scheduler_test_utils import (
-    FakeReq,
-    empty_request_lists,
-    idle_penalty_status_pool,
-)
+from sglang.test.scheduler_test_utils import empty_request_lists
 
 register_cpu_ci(est_time=11, suite="base-a-test-cpu")
 
 
-class _FakeReq(FakeReq):
+class _FakeReq:
     release_mm_inputs_on_abort = Req.release_mm_inputs_on_abort
     request_finish = Req.request_finish
     finish_outside_step = Req.finish_outside_step
@@ -92,7 +87,7 @@ def _scheduler(waiting_queue, running_reqs=(), last_batch_reqs=()):
     empty_request_lists(s)
     s.enable_continuous_input_polling = False
     s.result_queue = deque()
-    move(waiting_queue, s.waiting_queue)
+    s.waiting_queue.join(waiting_queue)
     s.enable_hierarchical_cache = False
     s.enable_hicache_storage = False
     s.enable_unified_cache_external_linker = False
@@ -128,7 +123,6 @@ class TestQueuedLimitAbort(CustomTestCase):
         s.schedule_low_priority_values_first = False
         s.enable_hierarchical_cache = True
         s.tree_cache = MagicMock(spec=["finish"])
-        s.penalty_status_pool = idle_penalty_status_pool()
         s.init_request_retirer()
 
         self.assertFalse(s._abort_on_queued_limit(incoming))
@@ -150,7 +144,6 @@ class TestQueuedLimitAbort(CustomTestCase):
         s.max_queued_requests = 1
         s.enable_priority_scheduling = True
         s.schedule_low_priority_values_first = False
-        s.penalty_status_pool = idle_penalty_status_pool()
         s.init_request_retirer()
 
         with patch(
@@ -171,7 +164,6 @@ class TestQueuedLimitAbort(CustomTestCase):
         s.max_queued_requests = 1
         s.enable_priority_scheduling = True
         s.schedule_low_priority_values_first = False
-        s.penalty_status_pool = idle_penalty_status_pool()
         s.init_request_retirer()
 
         self.assertTrue(s._abort_on_queued_limit(incoming))
@@ -222,10 +214,10 @@ class TestQueuedAbort(CustomTestCase):
         # Still listed in the last batch, as a requeued or dLLM request is.
         s = _scheduler([req], last_batch_reqs=[req])
         s.disaggregation_mode = DisaggregationMode.NULL
+        s.chunked_req = None
         s.mm_receiver = None
         s.dllm_config = None
         s.grammar_manager = MagicMock()
-        s.penalty_status_pool = idle_penalty_status_pool()
         s.init_request_retirer()
         s.request_retirer._detach = MagicMock()
 
@@ -243,7 +235,7 @@ class TestQueuedAbort(CustomTestCase):
         req = _req("staged")
         # Prefilled, in no batch, waiting for its host copy to land.
         staging = IndexedReqList(ListKind.HISPARSE_STAGING, req_of=lambda x: x.req)
-        move([SimpleNamespace(req=req)], staging)
+        staging.join([SimpleNamespace(req=req)])
         s = _scheduler([])
         s.disaggregation_mode = DisaggregationMode.NULL
         s.hisparse_coordinator = SimpleNamespace(
@@ -293,6 +285,7 @@ class TestRunningTimeout(CustomTestCase):
         s.enable_continuous_input_polling = True
         s.result_queue = deque([(_batch([stale]), None), (s.last_batch, None)])
         s.disaggregation_mode = DisaggregationMode.PREFILL
+        s.chunked_req = None
         s.mm_receiver = None
         s.dllm_config = None
         s.grammar_manager = MagicMock()

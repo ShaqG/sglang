@@ -26,6 +26,8 @@ logger = init_logger(__name__)
 
 
 class VMOBAAttentionBackend(AttentionBackend):
+    accept_output_buffer: bool = True
+
     @staticmethod
     def get_enum() -> AttentionBackendEnum:
         return AttentionBackendEnum.VMOBA_ATTN
@@ -33,6 +35,10 @@ class VMOBAAttentionBackend(AttentionBackend):
     @staticmethod
     def get_impl_cls() -> type["VMOBAAttentionImpl"]:
         return VMOBAAttentionImpl
+
+    @staticmethod
+    def get_metadata_cls() -> type["VideoMobaAttentionMetadata"]:
+        return VideoMobaAttentionMetadata
 
     @staticmethod
     def get_builder_cls() -> type["VideoMobaAttentionMetadataBuilder"]:

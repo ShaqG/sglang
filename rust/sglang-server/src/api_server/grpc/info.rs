@@ -20,8 +20,6 @@ pub(super) fn model_info(info: ModelInfo) -> Result<api::GetModelInfoResponse, S
         reasoning_parser,
         tool_call_parser,
         disaggregation_mode: _,
-        model_type,
-        architectures,
         launch_fields: _,
     } = info;
     let preferred_sampling_params = preferred_sampling_params
@@ -38,8 +36,6 @@ pub(super) fn model_info(info: ModelInfo) -> Result<api::GetModelInfoResponse, S
         load_format,
         reasoning_parser,
         tool_call_parser,
-        model_type,
-        architectures: architectures.unwrap_or_default(),
     })
 }
 
@@ -51,9 +47,7 @@ pub(super) fn server_info(info: ServerInfo) -> Result<api::GetServerInfoResponse
         tokenizer_path,
         max_context_length,
         max_total_num_tokens,
-        num_reserved_tokens,
         version,
-        instance_id,
         frontend: _,
         startup_time: _,
         internal_states,
@@ -61,8 +55,6 @@ pub(super) fn server_info(info: ServerInfo) -> Result<api::GetServerInfoResponse
         port,
         incremental_streaming_output,
         disaggregation_mode,
-        allow_auto_truncate,
-        skip_tokenizer_init,
         deployment_info,
         dp_listeners: _,
     } = info;
@@ -79,15 +71,11 @@ pub(super) fn server_info(info: ServerInfo) -> Result<api::GetServerInfoResponse
         tokenizer_path,
         max_context_length,
         max_total_num_tokens: Some(max_total_num_tokens),
-        num_reserved_tokens,
         version,
-        instance_id,
         internal_states,
         host,
         port: u32::from(port),
         incremental_streaming_output,
-        allow_auto_truncate,
-        skip_tokenizer_init,
         disaggregation_mode: serde_json::to_value(disaggregation_mode)
             .map_err(|error| error.to_string())?
             .as_str()

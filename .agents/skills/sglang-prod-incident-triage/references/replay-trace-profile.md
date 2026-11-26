@@ -127,14 +127,12 @@ python -m sglang.launch_server \
   ...
 ```
 
-Optional router command. `sgl-router` has no tracing flags and exports no
-spans; it forwards `traceparent` and `tracestate` to the workers, so engine
-spans stay in the client's trace:
+Optional router command:
 
 ```bash
-sgl-router \
-  --model-id <served-model-name> \
-  --worker-urls http://<worker-host>:<port> \
+python -m sglang_router.launch_router \
+  --enable-trace \
+  --otlp-traces-endpoint localhost:4317 \
   ...
 ```
 

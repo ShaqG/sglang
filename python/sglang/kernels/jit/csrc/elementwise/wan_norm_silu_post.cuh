@@ -2,7 +2,6 @@
 #include <sgl_kernel/tensor.h>
 #include <sgl_kernel/utils.h>
 
-#include <sgl_kernel/activation.cuh>
 #include <sgl_kernel/runtime.cuh>
 #include <sgl_kernel/type.cuh>
 #include <sgl_kernel/utils.cuh>
@@ -61,7 +60,7 @@ __global__ void wan_norm_silu_post_kernel(
       y = __fmul_rn(y, scale);
       y = __fmul_rn(y, weight);
       y = __fadd_rn(y, offset);
-      result[i] = device::activation::silu<false>(y);
+      result[i] = __fdiv_rn(y, __fadd_rn(1.f, expf(-y)));
     }
     result.store(output, vec);
   }

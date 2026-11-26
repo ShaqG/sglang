@@ -1,4 +1,4 @@
-from .gumbel.detector import (
+from .detector import (
     WatermarkDetection,
     WatermarkDetector,
     WatermarkStatistics,

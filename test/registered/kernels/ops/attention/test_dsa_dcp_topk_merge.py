@@ -60,14 +60,12 @@ def _rows(kind: str, seed: int) -> list[torch.Tensor]:
             torch.randint(0, 200, (32768 - 100 * i,), generator=g).float() / 8
             for i in range(4)
         ]
-    if kind.startswith("periodic"):
-        # one, two or three ranks own the whole top-k: their candidates cannot
-        # certify it (up to two take the register fallback, three the union)
-        owners = {"periodic": (3,), "periodic2": (3, 5), "periodic3": (2, 3, 5)}[kind]
+    if kind == "periodic":
+        # one rank owns the whole top-k: its candidates cannot certify it
         rows = []
         for n in (65536, 20000):
             base = torch.randn(8, generator=g)
-            base[list(owners)] += 10
+            base[3] += 10
             # distinct scores keep the local top-k exact, so only the merge is tested
             rows.append(
                 base.repeat(n // 8 + 1)[:n] + 4.0 * torch.randperm(n, generator=g) / n
@@ -176,8 +174,7 @@ class _Case:
 
 
 @pytest.mark.parametrize(
-    "kind",
-    ["random", "ties", "periodic", "periodic2", "periodic3", "signed_zeros", "short"],
+    "kind", ["random", "ties", "periodic", "signed_zeros", "short"]
 )
 @torch.inference_mode()
 def test_dcp_topk_merge(kind: str) -> None:
@@ -196,7 +193,7 @@ def test_dcp_topk_merge(kind: str) -> None:
         bad = case.failures(rank)
         assert _all_ranks_ok(not bad), bad or "failed on another rank"
         fell_back = merge.fallback[: case.rows].tolist()
-        if kind.startswith("periodic"):
+        if kind == "periodic":
             assert all(fell_back), fell_back
         elif kind in ("random", "short"):
             assert not any(fell_back), fell_back

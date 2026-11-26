@@ -54,20 +54,15 @@ class TestDynamicInt8MLAProlog(CustomTestCase):
     def setUpClass(cls):
         super().setUpClass()
         # The attention wrapper imports vendor packages even on a CPU host.
-        vendor_norm = ModuleType("sgl_kernel_npu.operators.norm")
+        vendor_norm = ModuleType("sgl_kernel_npu.norm.fused_split_qk_norm")
         vendor_norm.fused_split_qk_norm = Mock(
             side_effect=AssertionError("Unexpected unfused NPU operator")
-        )
-        vendor_matmul = ModuleType("sgl_kernel_npu.operators.matmul")
-        vendor_matmul.batch_matmul_transpose = Mock(
-            side_effect=AssertionError("Unexpected NPU batch matmul")
         )
         with patch.dict(
             "sys.modules",
             {
                 "torch_npu": ModuleType("torch_npu"),
-                vendor_norm.__name__: vendor_norm,
-                vendor_matmul.__name__: vendor_matmul,
+                "sgl_kernel_npu.norm.fused_split_qk_norm": vendor_norm,
             },
         ):
             cls.attention = importlib.import_module(

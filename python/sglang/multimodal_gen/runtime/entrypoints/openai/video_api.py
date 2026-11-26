@@ -43,7 +43,6 @@ from sglang.multimodal_gen.runtime.entrypoints.openai.utils import (
     flatten_extra_params,
     get_declared_request_extra_fields,
     merge_image_input_list,
-    parse_form_extra_value,
     process_generation_batch,
     request_extra_value,
     request_field_value,
@@ -107,6 +106,15 @@ async def shutdown_video_jobs() -> None:
             await task
 
 
+def _parse_form_extra_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
 _MULTIPART_EXTRA_FORM_FIELDS = (
     "attention_backend_override",
     "cache_dit_params",
@@ -148,7 +156,7 @@ def _merge_multipart_extra_form_fields(
 ) -> None:
     for key in _multipart_extra_form_keys(sampling_params_cls):
         if key in raw_form:
-            extra_from_form[key] = parse_form_extra_value(raw_form[key])
+            extra_from_form[key] = _parse_form_extra_value(raw_form[key])
 
 
 def _multipart_video_extras(
@@ -438,6 +446,7 @@ async def _dispatch_job_async(
         await resources.aclose()
 
 
+# TODO: support image to video generation
 @router.post("", response_model=VideoResponse)
 async def create_video(
     request: Request,
@@ -554,13 +563,13 @@ async def create_video(
 
                 def form_value(name: str, value: Any) -> Any:
                     selected = value if value is not None else extra_from_form.get(name)
-                    return parse_form_extra_value(selected)
+                    return _parse_form_extra_value(selected)
 
                 def form_text_value(name: str, value: Any) -> Any:
                     """Resolve a text field without JSON-decoding it.
 
                     Some models take a serialized JSON object as the prompt text, which
-                    ``parse_form_extra_value`` would turn back into a dict and fail
+                    ``_parse_form_extra_value`` would turn back into a dict and fail
                     request validation.
                     """
                     return value if value is not None else extra_from_form.get(name)

@@ -24,11 +24,7 @@ class GPTQIntelAMXLinearKernel:
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         _amx_process_weight_after_loading(
-            layer,
-            ["qweight", "qzeros", "scales"],
-            None,
-            "gptq",
-            is_symmetric=self.quant_config.is_sym,
+            layer, ["qweight", "qzeros", "scales"], None, "gptq"
         )
         layer.qweight = torch.nn.Parameter(layer.qweight.data, requires_grad=False)
         layer.qzeros = torch.nn.Parameter(layer.qzeros.data, requires_grad=False)
@@ -61,18 +57,10 @@ class GPTQIntelAMXMoEKernel:
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         _amx_process_weight_after_loading(
-            layer,
-            ["w13_qweight", "w13_qzeros", "w13_scales"],
-            None,
-            "gptq",
-            is_symmetric=self.quant_config.is_sym,
+            layer, ["w13_qweight", "w13_qzeros", "w13_scales"], None, "gptq"
         )
         _amx_process_weight_after_loading(
-            layer,
-            ["w2_qweight", "w2_qzeros", "w2_scales"],
-            None,
-            "gptq",
-            is_symmetric=self.quant_config.is_sym,
+            layer, ["w2_qweight", "w2_qzeros", "w2_scales"], None, "gptq"
         )
 
     def apply(
@@ -82,9 +70,8 @@ class GPTQIntelAMXMoEKernel:
     ) -> torch.Tensor:
         from sglang.srt.layers.moe.token_dispatcher import StandardCombineInput
 
-        activation = self.moe_runner_config.activation
-        assert activation in ("silu", "gelu"), (
-            f"Only SiLU and GELU activations are supported, got {activation}."
+        assert self.moe_runner_config.activation == "silu", (
+            "Only SiLU activation is supported."
         )
 
         x = dispatch_output.hidden_states
@@ -108,6 +95,5 @@ class GPTQIntelAMXMoEKernel:
             None,  # alpha
             None,  # limit
             True,  # is_vnni
-            activation,
         )
         return StandardCombineInput(hidden_states=output)

@@ -15,9 +15,9 @@ from sglang.test.test_utils import (
 )
 
 # Registered on the CPU suite but skipped wherever mlx is absent; runs for real
-# only on Apple Silicon. Also registered under extra-e2e-test-mlx, which the
+# only on Apple Silicon. Also registered under stage-b-e2e-mlx, which the
 # macOS CI lane (pr-test-mlx.yml) only dispatches via a gated workflow_dispatch.
-register_mlx_ci(est_time=1, suite="extra-e2e-test-mlx")
+register_mlx_ci(est_time=1, suite="stage-b-e2e-mlx")
 
 _HAS_MLX = importlib.util.find_spec("mlx") is not None
 
@@ -56,8 +56,7 @@ class TestQwen2MoeMlxCorrectness(CustomTestCase):
                 "--tp-size",
                 "1",
                 "--disable-radix-cache",
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
                 "--mem-fraction-static",
                 MEM_FRACTION_STATIC,
                 "--max-running-requests",

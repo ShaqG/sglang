@@ -82,8 +82,6 @@ impl CacheSource {
                 query_blocks,
                 pending_winners: Vec::new(),
                 block_hashes: None,
-                media_hashes: None,
-                media_winners: Vec::new(),
             }))),
             Err(PrefixIndexError::Rejected(code)) => Err(PickError::InvalidSignal(format!(
                 "KV Indexer rejected the query: {code}"

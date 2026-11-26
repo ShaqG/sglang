@@ -10,7 +10,6 @@ import unittest
 from sglang.srt.environ import envs
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.kits.abort_timeout_kit import AbortAllMixin
-from sglang.test.kits.sampling_penalty_kit import PenalizedEOSMixin
 from sglang.test.kits.spec_server_kits import (
     SpecAccuracyKit,
     SpecCorrectnessKit,
@@ -57,7 +56,6 @@ class TestEagleLlama2Suite(
     SpecAccuracyKit,
     SpecLogprobKit,
     SpecPenaltyKit,
-    PenalizedEOSMixin,
     SpecFeatureKit,
     AbortAllMixin,
 ):

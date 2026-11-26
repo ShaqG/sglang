@@ -485,9 +485,6 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         return (q_pe, k_rope, q_nope, k_nope, forward_batch, zero_allocator, positions)
 
     def forward_mlapo(self, positions, hidden_states, forward_batch, zero_allocator):
-        # Imported lazily so this module stays importable on CPU-only hosts.
-        from sgl_kernel_npu.operators.attention import mla_preprocess
-
         input_dtype = hidden_states.dtype
         if not self.has_preprocess_weights:
             self.preprocess_weights(hidden_states)
@@ -528,7 +525,7 @@ class NPUFusedMLAPreprocess(torch.nn.Module):
         else:
             q_a_layernorm_bias = self.dummy
 
-        mla_preprocess(
+        torch.ops.npu.mla_preprocess(
             hidden_states,
             self.dummy,
             self.dummy,

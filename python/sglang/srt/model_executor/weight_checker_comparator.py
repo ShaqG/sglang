@@ -42,13 +42,7 @@ class ComparableWeight:
         binade = binade.masked_fill(x < finfo.smallest_normal, finfo.smallest_normal)
         return binade * finfo.eps
 
-    @property
-    def device(self) -> torch.device:
-        raise NotImplementedError
-
-    def iter_chunks(
-        self, device: torch.device
-    ) -> Iterable[Tuple[torch.Tensor, Optional[torch.Tensor]]]:
+    def iter_chunks(self) -> Iterable[Tuple[torch.Tensor, Optional[torch.Tensor]]]:
         raise NotImplementedError
 
     def dequantize(self, dtype: torch.dtype = torch.bfloat16) -> torch.Tensor:
@@ -105,14 +99,10 @@ class Fp8BlockComparable(ComparableWeight):
         s = self._normalize_scale(self.w_q, self.w_s)
         return s, self._infer_block_size(self.w_q, s)
 
-    @property
-    def device(self) -> torch.device:
-        return self.w_q.device
-
-    def iter_chunks(self, device: torch.device):
+    def iter_chunks(self):
         s, block_size = self._scale_and_block_size()
         for q, s_chunk in self._iter_quant_chunks(self.w_q, s, block_size[0]):
-            q, s_chunk = q.to(device), s_chunk.to(device)
+            q, s_chunk = q.cuda(), s_chunk.cuda()
             if self.is_shuffled:
                 q = unshuffle_fp8_weight(q)
             yield (
@@ -139,14 +129,10 @@ class RawComparable(ComparableWeight):
     def __repr__(self) -> str:
         return f"raw(shape={tuple(self.tensor.shape)} dtype={self.tensor.dtype})"
 
-    @property
-    def device(self) -> torch.device:
-        return self.tensor.device
-
-    def iter_chunks(self, device: torch.device):
+    def iter_chunks(self):
         flat = self.tensor.reshape(-1)
         for start in range(0, flat.numel(), CHUNK_NUMEL):
-            yield flat[start : start + CHUNK_NUMEL].to(device), None
+            yield flat[start : start + CHUNK_NUMEL].cuda(), None
 
     def dequantize(self, dtype: torch.dtype = torch.bfloat16) -> torch.Tensor:
         return self.tensor
@@ -161,9 +147,8 @@ def compare_weights(
     sum_abs_err = 0.0
     num_exceed = 0
     numel = 0
-    device = actual.device
     for (expect_dq, expect_tol), (actual_dq, actual_tol) in zip(
-        expect.iter_chunks(device), actual.iter_chunks(device), strict=True
+        expect.iter_chunks(), actual.iter_chunks(), strict=True
     ):
         assert expect_dq.shape == actual_dq.shape, (
             f"{expect_dq.shape=} {actual_dq.shape=}"
@@ -193,15 +178,6 @@ def select_comparable_weight(quant_method) -> Optional[type]:
         and quant_method.block_quant
         and not quant_method.use_mxfp8
     ):
-        # Fp8BlockComparable assumes the checkpoint's square blocks.
-        if (
-            isinstance(quant_method, Fp8MoEMethod)
-            and quant_method.w2_weight_block_size is not None
-        ):
-            raise NotImplementedError(
-                "weight checker has no ComparableWeight for block-FP8 MoE "
-                "scales refined for a TP shard"
-            )
         return Fp8BlockComparable
     if isinstance(quant_method, ModelOptNvFp4FusedMoEMethod):
         if getattr(quant_method, "enable_flashinfer_trtllm_moe", False):

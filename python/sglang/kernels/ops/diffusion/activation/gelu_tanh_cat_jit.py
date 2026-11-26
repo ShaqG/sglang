@@ -20,6 +20,7 @@ def _module():
         *args,
         cuda_files=["diffusion/gelu_tanh_cat.cuh"],
         cuda_wrappers=[("gelu_tanh_cat", f"gelu_tanh_cat<{args}>")],
+        extra_cuda_cflags=["-lineinfo"],
     )
 
 

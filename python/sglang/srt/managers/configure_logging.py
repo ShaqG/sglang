@@ -14,21 +14,17 @@ limitations under the License.
 """
 
 """
-Configure the logging settings of a server. Only the options passed are sent;
-the server keeps its current value for every other setting.
+Configure the logging settings of a server.
 
 Usage:
-python3 -m sglang.srt.managers.configure_logging --url http://localhost:30000 --log-level debug
+python3 -m sglang.srt.managers.configure_logging --url http://localhost:30000
 """
 
 import argparse
 
 import requests
 
-from sglang.srt.environ import envs
-
-
-def _parse_args(argv=None) -> argparse.Namespace:
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", type=str, default="http://localhost:30000")
     parser.add_argument(
@@ -38,19 +34,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
         choices=["debug", "info", "warning", "error", "critical"],
         help="Set runtime log level",
     )
+    parser.add_argument("--log-requests", action="store_true")
+    parser.add_argument("--log-requests-level", type=int, default=3)
     parser.add_argument(
-        "--admin-api-key",
-        type=str,
-        default=envs.SGLANG_ADMIN_API_KEY.get(),
-        help="The server's --admin-api-key, which /configure_logging requires "
-        "(default: SGLANG_ADMIN_API_KEY).",
+        "--dump-requests-folder", type=str, default="/tmp/sglang_request_dump"
     )
-    parser.add_argument(
-        "--log-requests", action=argparse.BooleanOptionalAction, default=None
-    )
-    parser.add_argument("--log-requests-level", type=int, default=None)
-    parser.add_argument("--dump-requests-folder", type=str, default=None)
-    parser.add_argument("--dump-requests-threshold", type=int, default=None)
+    parser.add_argument("--dump-requests-threshold", type=int, default=1000)
     parser.add_argument(
         "--dump-requests-exclude-meta-keys",
         type=str,
@@ -61,13 +50,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
             "keep all keys. If not set, the server default is used."
         ),
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args()
 
-
-def _build_payload(args: argparse.Namespace) -> dict:
     payload = {
         "log_requests": args.log_requests,
-        "log_requests_level": args.log_requests_level,
+        "log_requests_level": args.log_requests_level,  # Log full requests
         "dump_requests_folder": args.dump_requests_folder,
         "dump_requests_threshold": args.dump_requests_threshold,
         "log_level": args.log_level,
@@ -78,18 +65,6 @@ def _build_payload(args: argparse.Namespace) -> dict:
             for k in args.dump_requests_exclude_meta_keys.split(",")
             if k.strip()
         ]
-    return {key: value for key, value in payload.items() if value is not None}
 
-
-if __name__ == "__main__":
-    args = _parse_args()
-    response = requests.post(
-        args.url + "/configure_logging",
-        json=_build_payload(args),
-        headers=(
-            {"Authorization": f"Bearer {args.admin_api_key}"}
-            if args.admin_api_key
-            else {}
-        ),
-    )
+    response = requests.post(args.url + "/configure_logging", json=payload)
     assert response.status_code == 200

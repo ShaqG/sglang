@@ -161,6 +161,7 @@ class TestTraceReqContextDisabled(unittest.TestCase):
     def test_init_disabled(self):
         ctx = TraceReqContext(rid="req-1")
         self.assertFalse(ctx.tracing_enable)
+        self.assertFalse(ctx.is_tracing_enabled())
 
     def test_getstate_disabled(self):
         ctx = TraceReqContext(rid="req-1")

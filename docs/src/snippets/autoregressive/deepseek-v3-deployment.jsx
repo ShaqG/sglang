@@ -156,7 +156,7 @@ export const DeepSeekV3Deployment = () => {
         cmd += ' \\\n  --attn-dp-size 8';
       }
       else {
-        cmd += ' \\\n  --attn-dp-size 6';
+        cmd += ' \\\n  --dp 6 \\\n  --enable-dp-attention';
       }
     }
     if (strategyArray.includes('ep')) cmd += ' \\\n  --ep 8';

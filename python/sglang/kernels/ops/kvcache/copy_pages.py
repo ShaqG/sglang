@@ -24,9 +24,7 @@ def _copy_pages_kernel(
     src = tl.load(src_pages + pair * SRC_STRIDE).to(tl.int64)
     dst = tl.load(dst_pages + pair * DST_STRIDE).to(tl.int64)
     offsets = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
-    # A pair naming one page for both ends (a padded `sink -> sink` pair of a
-    # fixed-shape move) copies nothing.
-    mask = (offsets < page_words) & (src != dst)
+    mask = offsets < page_words
     values = tl.load(buf + src * page_words + offsets, mask=mask)
     tl.store(buf + dst * page_words + offsets, values, mask=mask)
 
@@ -41,8 +39,7 @@ def copy_pages(
     num_pages: int,
     page_bytes: int,
 ) -> None:
-    """Copy src -> dst on the current stream; dst and src sets must be disjoint,
-    but for pairs naming one page for both, which copy nothing.
+    """Copy src -> dst on the current stream; dst and src sets must be disjoint.
 
     The allocator supplies unique destinations in free space. Overlapping float
     shifts are already split into ordered singleton calls by the allocator.

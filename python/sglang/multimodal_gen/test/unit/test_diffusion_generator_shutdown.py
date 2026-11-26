@@ -42,9 +42,8 @@ class TestDiffGeneratorShutdown(unittest.TestCase):
             output_file_path=None,
             perf_dump_path=None,
         )
-        succeeded, failed, empty = Mock(), Mock(), Mock()
+        succeeded, failed = Mock(), Mock()
         failed.generate.side_effect = RuntimeError("generation failed")
-        empty.generate.return_value = None
         with (
             patch.object(
                 cli_generate.ServerArgs, "from_cli_args", return_value=server_args
@@ -57,17 +56,14 @@ class TestDiffGeneratorShutdown(unittest.TestCase):
             patch.object(
                 cli_generate.DiffGenerator,
                 "from_pretrained",
-                side_effect=[succeeded, failed, empty],
+                side_effect=[succeeded, failed],
             ),
         ):
             cli_generate.generate_cmd(cli_args)
             with self.assertRaisesRegex(RuntimeError, "generation failed"):
                 cli_generate.generate_cmd(cli_args)
-            with self.assertRaisesRegex(RuntimeError, "Generation produced no results"):
-                cli_generate.generate_cmd(cli_args)
         succeeded.shutdown.assert_called_once_with()
         failed.shutdown.assert_called_once_with()
-        empty.shutdown.assert_called_once_with()
 
     def test_shutdown_uses_bounded_scheduler_timeout_and_forces_worker(self):
         generator = object.__new__(DiffGenerator)

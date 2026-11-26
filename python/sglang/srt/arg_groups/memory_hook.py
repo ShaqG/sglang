@@ -119,9 +119,7 @@ def handle_gpu_memory_settings(server_args: Any):
                     decode_cuda_graph_config.max_bs = 160
         elif gpu_mem < 60 * 1024:
             # A100 (40GB), L40,
-            # (chunked_prefill_size 4k, max_bs 128 if tp < 4 else 160)
-            # Measured on L40S with Qwen3 0.6B to 8B. Decode above the cap runs
-            # eager, and graphs up to bs=128 cost the 8B 1% of its KV pool.
+            # (chunked_prefill_size 4k, max_bs 32 if tp < 4 else 160)
             if cfg.chunked_prefill_size is None:
                 declare_resolution(
                     server_args,
@@ -130,7 +128,7 @@ def handle_gpu_memory_settings(server_args: Any):
                 )
             if decode_cuda_graph_config.max_bs is None:
                 if cfg.tp_size < 4:
-                    decode_cuda_graph_config.max_bs = 128
+                    decode_cuda_graph_config.max_bs = 32
                 else:
                     decode_cuda_graph_config.max_bs = 160
         elif gpu_mem < 90 * 1024:

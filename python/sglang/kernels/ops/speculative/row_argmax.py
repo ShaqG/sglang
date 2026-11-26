@@ -7,15 +7,9 @@ vocabulary saturates it instead.
 Ties resolve to the lowest index, matching ``ArgMaxOps``' strict ``>``.
 """
 
-from typing import Optional
-
 import torch
 import triton
 import triton.language as tl
-
-from sglang.srt.utils import is_npu
-
-_is_npu = is_npu()
 
 
 @triton.jit
@@ -37,8 +31,6 @@ def _medium_argmax_partial_kernel(
     BLOCK: tl.constexpr,
     DIVISOR=None,
     SD: tl.constexpr = 0,
-    DIVISOR_MIN: tl.constexpr = None,
-    IGNORE_NAN: tl.constexpr = False,
 ):
     row, part = tl.program_id(0), tl.program_id(1)
     ix = part * BLOCK + tl.arange(0, BLOCK)
@@ -46,14 +38,7 @@ def _medium_argmax_partial_kernel(
     v = tl.load(X + row * SX + ix, valid, float("-inf"))
     if DIVISOR is not None:
         divisor = tl.load(DIVISOR + row * SD + ix, valid, 1.0)
-        if DIVISOR_MIN is not None:
-            # clamp_min keeps a NaN divisor; tl.maximum would replace it.
-            divisor = tl.where(
-                divisor != divisor, divisor, tl.maximum(divisor, DIVISOR_MIN)
-            )
         v = tl.div_rn(v, divisor)
-    if IGNORE_NAN:
-        v = tl.where(v == v, v, float("-inf"))
     i = tl.where(valid, ix, N)
     best_v, best_i = tl.reduce((v, i), 0, _argmax_pair)
     tl.store(PV + row * SPLITS + part, best_v)
@@ -70,19 +55,51 @@ def _medium_argmax_final_kernel(PV, PI, OUT, SPLITS: tl.constexpr, BLOCK: tl.con
     tl.store(OUT + row, index.to(tl.int64))
 
 
-def div_argmax(
-    x: torch.Tensor,
-    divisor: torch.Tensor,
-    *,
-    divisor_min: Optional[float] = None,
-    ignore_nan: bool = False,
-) -> torch.Tensor:
-    """FP32 row-wise ``(x / divisor).argmax(-1)`` with unit column strides.
+@triton.jit
+def _npu_medium_argmax_partial_kernel(
+    X,
+    PV,
+    PI,
+    N: tl.constexpr,
+    SX: tl.constexpr,
+    SPLITS: tl.constexpr,
+    BLOCK: tl.constexpr,
+    DIVISOR=None,
+    SD: tl.constexpr = 0,
+):
+    # Ascend variant: the two-operand tl.reduce((v, i), combine) form lowers
+    # to a region tt.reduce the Ascend triton-mlir-opt cannot parse, so the
+    # NPU path uses one-operand tl.max/tl.min instead. Ties resolve to the
+    # lowest index; an all-NaN tile leaves the index at the N sentinel.
+    row, part = tl.program_id(0), tl.program_id(1)
+    ix = part * BLOCK + tl.arange(0, BLOCK)
+    valid = ix < N
+    v = tl.load(X + row * SX + ix, valid, float("-inf"))
+    if DIVISOR is not None:
+        divisor = tl.load(DIVISOR + row * SD + ix, valid, 1.0)
+        v = tl.div_rn(v, divisor)
+    i = tl.where(valid, ix, N)
+    best_v = tl.max(v, 0)
+    best_i = tl.min(tl.where(v == best_v, i, N), 0)
+    tl.store(PV + row * SPLITS + part, best_v)
+    tl.store(PI + row * SPLITS + part, best_i)
 
-    ``divisor_min`` first applies ``divisor.clamp_min(divisor_min)``. A NaN quotient
-    wins as in ``torch.argmax`` unless ``ignore_nan``; then it never wins, the rule
-    of the CUDA ``sampling.argmax`` kernel (a row with nothing above -inf gives 0).
-    """
+
+@triton.jit
+def _npu_medium_argmax_final_kernel(
+    PV, PI, OUT, SPLITS: tl.constexpr, BLOCK: tl.constexpr
+):
+    row = tl.program_id(0)
+    part = tl.arange(0, BLOCK)
+    v = tl.load(PV + row * SPLITS + part, part < SPLITS, float("-inf"))
+    i = tl.load(PI + row * SPLITS + part, part < SPLITS, 0x7FFFFFFF)
+    best_v = tl.max(v, 0)
+    best_i = tl.min(tl.where(v == best_v, i, 0x7FFFFFFF), 0)
+    tl.store(OUT + row, best_i.to(tl.int64))
+
+
+def div_argmax(x: torch.Tensor, divisor: torch.Tensor) -> torch.Tensor:
+    """FP32 row-wise ``(x / divisor).argmax(-1)`` with unit column strides."""
     assert x.ndim == 2 and x.dtype == torch.float32 and x.stride(1) == 1
     assert (
         divisor.shape == x.shape
@@ -90,25 +107,26 @@ def div_argmax(
         and divisor.device == x.device
         and divisor.stride(1) == 1
     )
-    if _is_npu:
-        from sgl_kernel_npu.operators.sample import div_argmax as npu_div_argmax
-
-        return npu_div_argmax(
-            x, divisor, divisor_min=divisor_min, ignore_nan=ignore_nan
-        )
-    return _medium_row_argmax(
-        x, divisor, divisor_min=divisor_min, ignore_nan=ignore_nan
-    )
+    return _medium_row_argmax(x, divisor)
 
 
-def _medium_row_argmax(x, divisor=None, divisor_min=None, ignore_nan=False):
+def _medium_row_argmax(x, divisor=None):
     rows, n = x.shape
     block = 4096 if rows <= 256 else 8192
     splits = triton.cdiv(n, block)
     values = torch.empty((rows, splits), dtype=torch.float32, device=x.device)
     indices = torch.empty((rows, splits), dtype=torch.int32, device=x.device)
     out = torch.empty(rows, dtype=torch.int64, device=x.device)
-    _medium_argmax_partial_kernel[(rows, splits)](
+    # The Ascend triton-mlir-opt cannot parse the two-operand tt.reduce the
+    # tl.reduce variants lower to; NPU runs the one-operand variants instead.
+    if x.device.type == "npu":
+        partial, final = (
+            _npu_medium_argmax_partial_kernel,
+            _npu_medium_argmax_final_kernel,
+        )
+    else:
+        partial, final = _medium_argmax_partial_kernel, _medium_argmax_final_kernel
+    partial[(rows, splits)](
         x,
         values,
         indices,
@@ -118,11 +136,9 @@ def _medium_row_argmax(x, divisor=None, divisor_min=None, ignore_nan=False):
         block,
         DIVISOR=divisor,
         SD=divisor.stride(0) if divisor is not None else 0,
-        DIVISOR_MIN=divisor_min,
-        IGNORE_NAN=ignore_nan,
         num_warps=4,
     )
-    _medium_argmax_final_kernel[(rows,)](
+    final[(rows,)](
         values, indices, out, splits, triton.next_power_of_2(splits), num_warps=1
     )
     return out

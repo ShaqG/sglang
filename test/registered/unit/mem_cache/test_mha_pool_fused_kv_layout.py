@@ -16,7 +16,6 @@ import torch
 from sglang.srt.mem_cache import memory_pool
 from sglang.srt.mem_cache.memory_pool import MHATokenToKVPool
 from sglang.test.ci.ci_register import register_cpu_ci
-from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 
@@ -25,7 +24,7 @@ HEAD_DIM = 128
 LAYER_NUM = 2
 
 
-def _make_pool(page_size, kv_cache_layout=None):
+def _make_pool(page_size):
     return MHATokenToKVPool(
         size=page_size * 7,
         page_size=page_size,
@@ -36,21 +35,10 @@ def _make_pool(page_size, kv_cache_layout=None):
         device="cpu",
         enable_memory_saver=False,
         enable_alt_stream=False,
-        kv_cache_layout=kv_cache_layout,
     )
 
 
-class TestMHAPoolFusedKVLayout(CustomTestCase):
-    def test_explicit_hnd_layout(self):
-        """An explicit HND layout must initialize paged, head-major buffers."""
-        pool = _make_pool(page_size=16, kv_cache_layout="hnd")
-        self.assertTrue(pool.use_hnd)
-        self.assertEqual(pool.num_pages, 8)
-        for layer_id in range(LAYER_NUM):
-            k_buf, v_buf = pool.get_kv_buffer(layer_id)
-            self.assertEqual(k_buf.shape, (8, HEAD_NUM, 16, HEAD_DIM))
-            self.assertEqual(v_buf.shape, (8, HEAD_NUM, 16, HEAD_DIM))
-
+class TestMHAPoolFusedKVLayout(unittest.TestCase):
     def test_v_is_block_aligned_offset_from_k(self):
         for page_size in (16, 32, 64):
             with self.subTest(page_size=page_size):

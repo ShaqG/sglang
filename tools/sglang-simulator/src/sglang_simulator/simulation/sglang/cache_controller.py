@@ -52,16 +52,12 @@ class C_HiCacheController(BaseHook):
         def override_backup_thread_func(self, *args, **kwargs):
             # Async thread: perform no action
             # The action will be performed by `handle_backup_operation`
-            # Stay alive until the controller stops its workers: SGLang fails
-            # the rank when a started storage worker exits early.
-            self.storage_stop_event.wait()
+            pass
 
         def override_prefetch_thread_func(self, *args, **kwargs):
             # Async thread: perform no action
             # The action will be performed by `handle_prefetch_operation`
-            # Stay alive until the controller stops its workers: SGLang fails
-            # the rank when a started storage worker exits early.
-            self.storage_stop_event.wait()
+            pass
 
         def handle_backup_operation(self):
             if not self.enable_storage:

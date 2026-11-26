@@ -14,8 +14,7 @@ class EngramPlacement:
 class EngramReplication:
     NONE = "none"
     PER_NODE = "per_node"
-    GROUP_SHARDS = "group_shards"
-    ALL = (NONE, PER_NODE, GROUP_SHARDS)
+    ALL = (NONE, PER_NODE)
 
 
 class EngramLookup:
@@ -43,48 +42,18 @@ class EngramConfig:
     placement: str = _choice(EngramPlacement.GPU, EngramPlacement.ALL)
     replication: str = _choice(EngramReplication.NONE, EngramReplication.ALL)
     lookup: str = _choice(EngramLookup.AUTO, EngramLookup.ALL)
-    # Replication group_shards only: the GPU count of the servers sharing the
-    # tables, and a directory all of them see, empty for each deployment.
-    group_size: int = 0
-    group_store: str = ""
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "EngramConfig":
         if raw.get("lookup") == EngramLookup.COLLECTIVE:
             raw = {**raw, "lookup": EngramLookup.AUTO}
-        fields = {f.name: f for f in dataclasses.fields(cls)}
-        choices = {n: f.metadata["choices"] for n, f in fields.items() if f.metadata}
-        invalid = [
-            f"{k}={v!r}"
-            for k, v in raw.items()
-            if k not in fields
-            or (k in choices and v not in choices[k])
-            or (k not in choices and type(v) is not type(fields[k].default))
-        ]
+        choices = {f.name: f.metadata["choices"] for f in dataclasses.fields(cls)}
+        invalid = [f"{k}={v!r}" for k, v in raw.items() if v not in choices.get(k, ())]
         if invalid:
             raise ValueError(
                 f"--engram-config: invalid {', '.join(invalid)}; choices: {choices}"
             )
         config = cls(**raw)
-        if config.replication == EngramReplication.GROUP_SHARDS:
-            if config.lookup not in (EngramLookup.AUTO, EngramLookup.PEER_READ):
-                raise ValueError(
-                    "--engram-config: replication 'group_shards' reads the shards "
-                    "in place; lookup must be 'auto' or 'peer_read'."
-                )
-            if config.group_size <= 0 or not config.group_store:
-                raise ValueError(
-                    "--engram-config: replication 'group_shards' needs 'group_size', "
-                    "the GPU count of the servers sharing the tables, and "
-                    "'group_store', a directory all of them see, empty for each "
-                    "deployment."
-                )
-            return dataclasses.replace(config, lookup=EngramLookup.PEER_READ)
-        if config.group_size or config.group_store:
-            raise ValueError(
-                "--engram-config: 'group_size' and 'group_store' apply to "
-                "replication 'group_shards' only."
-            )
         if (
             config.lookup == EngramLookup.PEER_READ
             and config.placement != EngramPlacement.GPU

@@ -90,10 +90,7 @@ def fused_k_indexer_norm_rope_store(
     neox_style: bool = False,
 ) -> None:
     """Indexer K + fused store: LayerNorm + RoPE on leading dims (+ Hadamard) +
-    fp8 act-quant + paged index-k cache write, in one launch. CUDA only.
-
-    ``cache`` is (num_pages, 132 * page_size) uint8 with one row per page; its
-    rows may be strided, and the kernel follows ``cache.stride(0)``."""
+    fp8 act-quant + paged index-k cache write, in one launch. CUDA only."""
     if not out_cache_loc.is_contiguous():
         out_cache_loc = out_cache_loc.contiguous()
     module = _jit_k_indexer_norm_rope_store_module(

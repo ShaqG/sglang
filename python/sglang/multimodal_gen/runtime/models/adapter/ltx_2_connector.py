@@ -379,6 +379,8 @@ class LTX2ConnectorTransformer1d(nn.Module):
     In LTX 2.0, this is used to process the text encoder hidden states for each of the video and audio streams.
     """
 
+    _supports_gradient_checkpointing = True
+
     def __init__(
         self,
         num_attention_heads: int = 30,
@@ -431,6 +433,8 @@ class LTX2ConnectorTransformer1d(nn.Module):
         self.norm_out = torch.nn.RMSNorm(
             self.inner_dim, eps=eps, elementwise_affine=False
         )
+
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -495,9 +499,14 @@ class LTX2ConnectorTransformer1d(nn.Module):
 
         # 3. Run 1D transformer blocks
         for block in self.transformer_blocks:
-            hidden_states = block(
-                hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb
-            )
+            if torch.is_grad_enabled() and self.gradient_checkpointing:
+                hidden_states = self._gradient_checkpointing_func(
+                    block, hidden_states, attention_mask, rotary_emb
+                )
+            else:
+                hidden_states = block(
+                    hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb
+                )
 
         hidden_states = self.norm_out(hidden_states)
 

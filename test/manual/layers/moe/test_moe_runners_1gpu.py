@@ -49,6 +49,18 @@ class TestMoERunner(CustomTestCase):
                 "pytorch",
             ],
         },
+        "moe_runner_triton_kernel": {
+            "model": DEFAULT_SMALL_MOE_MODEL_NAME_FOR_TEST_CHAT,
+            "other_args": [
+                "--trust-remote-code",
+                "--moe-runner-backend",
+                "triton_kernel",
+                "--attention-backend",
+                "torch_native",
+                "--sampling-backend",
+                "pytorch",
+            ],
+        },
         "moe_runner_flashinfer_cutlass": {
             "model": DEFAULT_MODEL_NAME_FOR_TEST_MOE_NVFP4,  # requires model with modelopt_fp4 quantization
             "other_args": [
@@ -130,8 +142,7 @@ class TestMoERunner(CustomTestCase):
                 "triton",
                 "--sampling-backend",
                 "pytorch",
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
             ],
         },
         "moe_runner_speculative": {

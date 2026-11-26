@@ -32,9 +32,11 @@ import ast
 import itertools
 import math
 import re
+from io import BytesIO
 from typing import Callable, Literal, Optional, Sequence
 
 import numpy as np
+import pybase64
 import torch
 from PIL import Image
 
@@ -54,13 +56,6 @@ def has_valid_data(data) -> bool:
     if isinstance(data, list):
         return any(has_valid_data(item) for item in flatten_nested_list(data))
     return True
-
-
-def batch_single_media_input(value):
-    """Keep one request's flat media list together when promoting it to a batch."""
-    if isinstance(value, list) and (not value or not isinstance(value[0], list)):
-        return [value]
-    return value
 
 
 def materialize_multimodal_features(
@@ -322,6 +317,10 @@ def process_anyres_image(image, processor, grid_pinpoints):
     # In transformers v5, image processors may return torch.Tensor instead of numpy arrays
     image_patches = [ensure_numpy(p) for p in image_patches]
     return np.stack(image_patches, axis=0)
+
+
+def load_image_from_base64(image):
+    return Image.open(BytesIO(pybase64.b64decode(image, validate=True)))
 
 
 def expand2square(pil_img, background_color):

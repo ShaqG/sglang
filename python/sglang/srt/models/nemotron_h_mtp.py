@@ -330,7 +330,6 @@ class NemotronHForCausalLMMTP(NemotronHForCausalLM):
         self.config = config
         self.quant_config = quant_config
         self._owns_lm_head = False
-        self.loaded_input_embedding = False
         # Required for parent's load_weights
         self.pp_group = get_parallel().pp_group
 
@@ -380,18 +379,13 @@ class NemotronHForCausalLMMTP(NemotronHForCausalLM):
     ):
         has_mtp_layers = False
         has_target_layers = False
-        has_embedding = False
         head_weights = set()
 
         def normalized_weights():
-            nonlocal has_mtp_layers, has_target_layers, has_embedding
+            nonlocal has_mtp_layers, has_target_layers
             for name, weight in weights:
                 name = name.removeprefix("language_model.")
                 has_mtp_layers |= name.startswith("mtp.layers.")
-                has_embedding |= name in (
-                    "backbone.embeddings.weight",
-                    "model.embed_tokens.weight",
-                )
                 has_target_layers |= name.startswith(
                     ("backbone.layers.", "model.layers.")
                 )
@@ -402,7 +396,6 @@ class NemotronHForCausalLMMTP(NemotronHForCausalLM):
         # Inspect names while streaming: buffering a full target checkpoint here
         # would double its host-memory footprint during embedded MTP loading.
         super().load_weights(normalized_weights(), is_mtp=True)
-        self.loaded_input_embedding = has_embedding
         self._owns_lm_head = bool(
             has_mtp_layers and not has_target_layers and head_weights
         )

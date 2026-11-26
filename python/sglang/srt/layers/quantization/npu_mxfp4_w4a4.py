@@ -131,7 +131,9 @@ class Mxfp4W4A4Config(QuantizationConfig):
                 "run in full precision (BF16/FP16).",
                 prefix,
             )
-            return UnquantizedFusedMoEMethod(layer.use_flashinfer_trtllm_moe)
+            return UnquantizedFusedMoEMethod(
+                layer.use_triton_kernels, layer.use_flashinfer_trtllm_moe
+            )
         return None
 
     def get_scaled_act_names(self) -> List[str]:

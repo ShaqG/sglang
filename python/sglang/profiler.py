@@ -15,9 +15,7 @@ from typing import List, Optional
 
 import requests
 
-from sglang.srt.environ import envs
-
-PROFILER_DIR = envs.SGLANG_TORCH_PROFILER_DIR.get()
+PROFILER_DIR = os.getenv("SGLANG_TORCH_PROFILER_DIR", "/tmp")
 
 
 def run_profile(
@@ -29,11 +27,9 @@ def run_profile(
     merge_profiles: bool = False,
     profile_prefix: Optional[str] = None,
     start_step: Optional[int] = None,
-    admin_api_key: Optional[str] = None,
 ) -> str:
     if output_dir is None:
         output_dir = PROFILER_DIR
-    admin_api_key = admin_api_key or envs.SGLANG_ADMIN_API_KEY.get()
 
     output_dir = Path(os.path.abspath(os.path.normpath(output_dir))) / str(time.time())
     output_dir.mkdir(exist_ok=True, parents=True)
@@ -65,11 +61,7 @@ def run_profile(
     if start_step is not None:
         json_data["start_step"] = str(start_step)
 
-    response = requests.post(
-        url=url + "/start_profile",
-        json=json_data,
-        headers={"Authorization": f"Bearer {admin_api_key}"} if admin_api_key else {},
-    )
+    response = requests.post(url=url + "/start_profile", json=json_data)
     response.raise_for_status()
 
     trace_link = str(output_dir)
@@ -77,9 +69,7 @@ def run_profile(
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(
-        description="Run live profiling on a running SGLang server."
-    )
+    parser = ArgumentParser(description="Benchmark the online serving throughput.")
     parser.add_argument(
         "--url",
         type=str,
@@ -101,6 +91,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--profile-by-stage",
         action=argparse.BooleanOptionalAction,
+        type=bool,
         default=False,
         help="Whether to profile prefill and decode separately",
     )
@@ -112,38 +103,37 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cpu",
         action=argparse.BooleanOptionalAction,
+        type=bool,
         default=True,
         help="Whether to profile CPU activity",
     )
     parser.add_argument(
         "--gpu",
         action=argparse.BooleanOptionalAction,
+        type=bool,
         default=True,
         help="Whether to profile GPU activity",
     )
     parser.add_argument(
         "--mem",
         action=argparse.BooleanOptionalAction,
+        type=bool,
         default=False,
         help="Whether to profile memory usage (https://pytorch.org/memory_viz)",
     )
     parser.add_argument(
         "--rpd",
         action=argparse.BooleanOptionalAction,
+        type=bool,
         default=False,
         help="Whether to use ROCM rpd profiler (https://github.com/ROCm/rocmProfileData)",
     )
     parser.add_argument(
         "--merge-profiles",
         action=argparse.BooleanOptionalAction,
+        type=bool,
         default=False,
         help="Whether to merge profiles from all ranks into a single trace file",
-    )
-    parser.add_argument(
-        "--admin-api-key",
-        type=str,
-        default=None,
-        help="The server's --admin-api-key, which /start_profile requires (default: SGLANG_ADMIN_API_KEY).",
     )
 
     args = parser.parse_args()
@@ -165,5 +155,4 @@ if __name__ == "__main__":
         profile_by_stage=args.profile_by_stage,
         profile_prefix=args.profile_prefix,
         merge_profiles=args.merge_profiles,
-        admin_api_key=args.admin_api_key,
     )

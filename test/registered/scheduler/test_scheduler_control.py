@@ -12,8 +12,6 @@ from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 from sglang.test.kits.abort_timeout_kit import AbortAllMixin, WaitingTimeoutMixin
 from sglang.test.kits.pause_generation_kit import PauseResumeInPlaceMixin
 from sglang.test.test_utils import (
-    ADMIN_HEADERS_FOR_TEST,
-    ADMIN_LAUNCH_ARGS_FOR_TEST,
     DEFAULT_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
@@ -23,7 +21,7 @@ from sglang.test.test_utils import (
 )
 
 register_cuda_ci(est_time=424, stage="base-b", runner_config="1-gpu-small")
-register_amd_ci(est_time=300, suite="base-b-test-1-gpu-small-amd")
+register_amd_ci(est_time=300, suite="stage-b-test-1-gpu-small-amd")
 
 
 class TestAbort(CustomTestCase):
@@ -114,8 +112,6 @@ class TestAbortWithApiKey(CustomTestCase):
 
 
 class TestSchedulerControl(AbortAllMixin, PauseResumeInPlaceMixin, CustomTestCase):
-    abort_request_headers = ADMIN_HEADERS_FOR_TEST
-
     @classmethod
     def setUpClass(cls):
         cls.model = DEFAULT_MODEL_NAME_FOR_TEST
@@ -124,11 +120,7 @@ class TestSchedulerControl(AbortAllMixin, PauseResumeInPlaceMixin, CustomTestCas
             cls.model,
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=[
-                "--max-running-requests",
-                8,
-                *ADMIN_LAUNCH_ARGS_FOR_TEST,
-            ],
+            other_args=["--max-running-requests", 8],
         )
 
     @classmethod

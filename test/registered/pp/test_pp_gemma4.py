@@ -9,7 +9,6 @@ from sglang.test.test_utils import (
     DEFAULT_MODEL_NAME_FOR_TEST_GEMMA4_PLE_PP,
     DEFAULT_MODEL_NAME_FOR_TEST_GEMMA4_PP,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-    DEFAULT_URL_FOR_TEST,
     is_in_amd_ci,
     popen_launch_server,
 )
@@ -34,7 +33,7 @@ class TestGemma4PPAccuracy(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model = DEFAULT_MODEL_NAME_FOR_TEST_GEMMA4_PP
-        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.base_url = "http://127.0.0.1:23333"
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
@@ -91,7 +90,7 @@ class TestGemma4PLEPPAccuracy(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.model = DEFAULT_MODEL_NAME_FOR_TEST_GEMMA4_PLE_PP
-        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.base_url = "http://127.0.0.1:23339"
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
@@ -104,10 +103,7 @@ class TestGemma4PLEPPAccuracy(unittest.TestCase):
                 "--trust-remote-code",
                 "--enable-multimodal",
                 # Required for PLE under PP — see Gemma4TextModel guard.
-                "--cuda-graph-backend-decode",
-                "disabled",
-                "--cuda-graph-backend-prefill",
-                "disabled",
+                "--disable-cuda-graph",
             ],
         )
 

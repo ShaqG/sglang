@@ -832,7 +832,6 @@ class DsparkStepObservers:
         draft_tokens: torch.Tensor,
         draft_block,
         sampling_info,
-        has_grammar: bool,
         correct_len: torch.Tensor,
         cap_trim_lens: torch.Tensor,
         bonus: torch.Tensor,
@@ -884,7 +883,7 @@ class DsparkStepObservers:
                     else None
                 ),
                 logits_adjustments_are_noop=verify_logits_adjustments_are_noop(
-                    sampling_info, has_grammar=has_grammar
+                    sampling_info
                 ),
                 correct_len=correct_len,
                 cap_trim_lens=cap_trim_lens,

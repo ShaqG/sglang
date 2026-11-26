@@ -283,8 +283,7 @@ def _sparse_gqa_chunk_prefill(
     )
 
 
-# SR0 varies per batch for the KV-shard scratch slot table; do not recompile on it.
-@triton.jit(do_not_specialize=["TOTAL_K", "BS", "SR0"])
+@triton.jit(do_not_specialize=["TOTAL_K", "BS"])
 def _pack_qsa_prefill_kv(
     k,
     v,
@@ -299,7 +298,7 @@ def _pack_qsa_prefill_kv(
     SV0: tl.constexpr,
     SV1: tl.constexpr,
     SV2: tl.constexpr,
-    SR0,
+    SR0: tl.constexpr,
     SR1: tl.constexpr,
     HEADS: tl.constexpr,
     DIM: tl.constexpr,

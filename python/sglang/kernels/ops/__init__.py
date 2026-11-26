@@ -6,12 +6,14 @@ exposes thin, lazily-dispatched wrapper callables.
 
 Importing this package eagerly imports every group so the registry is fully
 populated for inventory tooling. Group imports are metadata-only and do not
-import a kernel backend.
+import ``torch`` or a kernel backend.
 """
 
 from importlib import import_module
 
-# Operator groups from the RFC's proposed shape.
+# Operator groups from the RFC's proposed shape. Populated groups expose
+# callable wrappers today; the rest are reserved package placeholders that keep
+# the namespace shape stable for later phases.
 _GROUPS = (
     "activation",
     "attention",

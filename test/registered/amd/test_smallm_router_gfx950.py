@@ -7,16 +7,14 @@ import torch
 from sglang.test.ci.ci_register import register_amd_ci
 from sglang.test.test_utils import CustomTestCase
 
-register_amd_ci(est_time=60, suite="base-b-test-1-gpu-small-amd-mi35x")
-register_amd_ci(est_time=60, suite="base-b-test-1-gpu-small-amd")
+register_amd_ci(est_time=60, suite="stage-b-test-1-gpu-small-amd-mi35x")
 
 
 @unittest.skipUnless(
     torch.version.hip
     and torch.cuda.is_available()
-    and torch.cuda.get_device_properties(0).gcnArchName.split(":")[0]
-    in ("gfx950", "gfx942"),
-    "gfx950 (MI35x) or gfx942 (MI300X/MI325X) only",
+    and torch.cuda.get_device_properties(0).gcnArchName.startswith("gfx950"),
+    "gfx950 (MI35x) only",
 )
 class TestSmallMRouterGfx950(CustomTestCase):
     def _ints(self, *shape, bound):
@@ -60,8 +58,8 @@ class TestSmallMRouterGfx950(CustomTestCase):
             x[:, :2048],
         ):
             self.assertFalse(R.smallm_router_supported(bad))
-        gfx90a = SimpleNamespace(hip=SimpleNamespace(gcn_arch="gfx90a"))
-        with mock.patch.object(R, "current_arch", return_value=gfx90a):
+        gfx942 = SimpleNamespace(hip=SimpleNamespace(gcn_arch="gfx942"))
+        with mock.patch.object(R, "current_arch", return_value=gfx942):
             self.assertFalse(R.smallm_router_supported(x))
 
         g = torch.cuda.CUDAGraph()

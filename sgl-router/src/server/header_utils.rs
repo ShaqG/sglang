@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Header forwarding whitelist.
+//! Header forwarding whitelist — mirrors SMG semantics.
 
 use axum::http::HeaderName;
 
 /// True if a request header from the inbound client should be forwarded
-/// to the upstream worker.
+/// to the upstream worker. Mirrors SMG's whitelist semantics.
 pub fn should_forward_request_header(name: &HeaderName) -> bool {
     let n = name.as_str();
     matches!(

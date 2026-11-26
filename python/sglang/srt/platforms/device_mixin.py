@@ -20,8 +20,9 @@ Method status annotations:
 
 - ``[Active]``  — SGLang core calls this method through ``current_platform``.
   OOT implementations take effect immediately.
-- ``[Planned]`` — Reserved interface. SGLang core does not call it yet, so
-  OOT implementations will NOT take effect until the core is migrated.
+- ``[Planned]`` — Reserved interface. SGLang core still uses hardcoded calls
+  (e.g. ``torch.cuda.empty_cache()``). OOT implementations will NOT take
+  effect until the core is migrated in a future PR.
 """
 
 import enum
@@ -181,18 +182,19 @@ class DeviceMixin:
         yield device_id
 
     # ------------------------------------------------------------------
-    # Device operations.  The ones still marked [Planned] are reserved:
-    # core does not call them yet.
+    # Planned methods — reserved interface.  Core still uses hardcoded
+    # calls (e.g. torch.cuda.*).  OOT implementations will NOT take
+    # effect until the core is migrated in a future PR.
     # ------------------------------------------------------------------
 
     # ---- Device management ----
 
     def get_device(self, device_id: int = 0) -> str:
-        """[Active] Return ``torch.device`` for the given device id."""
+        """[Planned] Return ``torch.device`` for the given device id."""
         raise NotImplementedError
 
     def set_device(self, device: "torch.device") -> None:
-        """[Active] Set the current device."""
+        """[Planned] Set the current device."""
         raise NotImplementedError
 
     def get_device_name(self, device_id: int = 0) -> str:
@@ -200,19 +202,19 @@ class DeviceMixin:
         raise NotImplementedError
 
     def get_device_uuid(self, device_id: int = 0) -> str:
-        """[Active] Get unique device identifier string."""
+        """[Planned] Get unique device identifier string."""
         raise NotImplementedError
 
     def get_device_capability(self, device_id: int = 0) -> Optional["DeviceCapability"]:
-        """[Active] Get device compute capability. None if N/A."""
+        """[Planned] Get device compute capability. None if N/A."""
         raise NotImplementedError
 
     def empty_cache(self) -> None:
-        """[Active] Release cached device memory. No-op for CPU-like platforms."""
+        """[Planned] Release cached device memory. No-op for CPU-like platforms."""
         pass
 
     def synchronize(self) -> None:
-        """[Active] Synchronize device operations. No-op for CPU-like platforms."""
+        """[Planned] Synchronize device operations. No-op for CPU-like platforms."""
         pass
 
     # ---- Memory ----
@@ -272,11 +274,11 @@ class DeviceMixin:
         return CpuArchEnum.UNSPECIFIED
 
     def get_torch_profiler_activity_str(self) -> str:
-        """[Active] Return the torch profiler activity string."""
+        """[Planned] Return the torch profiler activity string."""
         raise NotImplementedError
 
     def get_torch_profiler_activity(self) -> torch.profiler.ProfilerActivity:
-        """[Active] Return the torch profiler activity."""
+        """[Planned] Return the torch profiler activity."""
         raise NotImplementedError
 
     # ------------------------------------------------------------------

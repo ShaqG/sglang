@@ -132,10 +132,8 @@ inline int64_t get_4bit_block_k_size(int64_t group_size) {
 at::Tensor convert_weight_packed(at::Tensor& weight);
 
 // pack weight to vnni format for int4
-// GPTQ: symmetric uses zero point 8; asymmetric decodes stored zero + 1.
-// AWQ: symmetric is unsupported; asymmetric uses checkpoint zero points.
-std::tuple<at::Tensor, at::Tensor, at::Tensor> convert_weight_packed_scale_zp(
-    at::Tensor qweight, at::Tensor qzeros, at::Tensor scales, int64_t quant_method_4bit, bool is_symmetric = false);
+std::tuple<at::Tensor, at::Tensor, at::Tensor>
+convert_weight_packed_scale_zp(at::Tensor qweight, at::Tensor qzeros, at::Tensor scales);
 
 // moe implementations for int8 w8a8
 template <typename scalar_t>
@@ -245,8 +243,7 @@ void fused_experts_int4_w4a8_kernel_impl(
     int64_t K,
     int64_t E,
     int64_t topk,
-    int64_t num_tokens_post_pad,
-    CPUActMethod activation);
+    int64_t num_tokens_post_pad);
 
 template <typename scalar_t>
 void shared_expert_fp8_kernel_impl(

@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from sglang.kernels.arch import current_arch
 from sglang.kernels.jit.utils import cache_once, load_jit, make_cpp_args
 
 if TYPE_CHECKING:
@@ -51,7 +50,7 @@ def use_router_gate_matvec_cuda(
         1 <= m <= _MAX_M
         and k % chunk == 0
         and e % rows == 0
-        and current_arch().is_sm(9)
+        and torch.cuda.get_device_capability(x.device)[0] >= 9
     )
 
 

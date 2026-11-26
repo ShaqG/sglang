@@ -29,10 +29,8 @@ from sglang.test.test_utils import (
 )
 from sglang.test.xpu.test_xpu_utils import write_results_to_github_step_summary
 
-register_xpu_ci(est_time=7200, suite="nightly-kernel-main-test-1-gpu-xpu", nightly=True)
-register_xpu_ci(
-    est_time=7200, suite="nightly-kernel-wheel-test-1-gpu-xpu", nightly=True
-)
+register_xpu_ci(est_time=7200, suite="nightly-xpu-kernel-main-1-gpu", nightly=True)
+register_xpu_ci(est_time=7200, suite="nightly-xpu-kernel-wheel-1-gpu", nightly=True)
 
 # Repo root: test/registered/xpu/<this file> -> parents[3].
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -69,8 +67,7 @@ class TestDeepSeekOCR2OlmBenchXPU(CustomTestCase):
         "--enable-mixed-chunk",
         "--chunked-prefill-size",
         "8192",
-        "--disable-decode-cuda-graph",
-        "--disable-prefill-cuda-graph",
+        "--disable-cuda-graph",
     ]
     env = {}
 

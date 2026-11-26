@@ -357,36 +357,6 @@ def create_tensorcast_host_allocator(
     return TensorcastHostTensorAllocator(session)
 
 
-def _tensorcast_source_from_runtime() -> TensorcastConfigSource:
-    """The published TensorCast HiCache config source, required for the backend."""
-
-    from sglang.srt.runtime_context import get_memory
-
-    source = get_memory().hicache_storage_backend_extra_config
-    if source is None:
-        raise ValueError(
-            "--hicache-storage-backend tensorcast requires "
-            "--hicache-storage-backend-extra-config with tensorcast.daemon_address"
-        )
-    return source
-
-
-def tensorcast_host_allocator_class_from_runtime() -> type[HostTensorAllocator]:
-    """The allocator class get_tensorcast_host_allocator_from_runtime() selects.
-
-    SCRATCH mode allocates through SGLang's own HostTensorAllocator; the other
-    modes need the tensorcast package, whose absence makes the runtime
-    resolution fall back to that default allocator as well.
-    """
-    config = normalize_tensorcast_config(_tensorcast_source_from_runtime())
-    if config.transfer_mode == TensorcastTransferMode.SCRATCH:
-        return HostTensorAllocator
-    # build_tensorcast_session_options imports this before any allocation.
-    from tensorcast.api.store import RegionBackedArtifactSession  # noqa: F401
-
-    return TensorcastHostTensorAllocator
-
-
 def get_tensorcast_host_allocator_from_runtime() -> HostTensorAllocator:
     """Select the TensorCast allocator from the published SGLang config."""
 
@@ -394,8 +364,14 @@ def get_tensorcast_host_allocator_from_runtime() -> HostTensorAllocator:
     from sglang.srt.runtime_context import get_memory
 
     memory = get_memory()
+    source = memory.hicache_storage_backend_extra_config
+    if source is None:
+        raise ValueError(
+            "--hicache-storage-backend tensorcast requires "
+            "--hicache-storage-backend-extra-config with tensorcast.daemon_address"
+        )
     return create_tensorcast_host_allocator(
-        _tensorcast_source_from_runtime(),
+        source,
         host_memory_mode=memory.hicache_host_memory_mode,
         host_layout=memory.hicache_mem_layout,
         io_backend=memory.hicache_io_backend,

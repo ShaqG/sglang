@@ -53,10 +53,7 @@ _STATE_DRAFT = DraftStateRegion(
 def _draft(*hosts: str) -> FusedDraftPlacement:
     regions = {h: _STATE_DRAFT if h == "mamba" else _DENSE_DRAFT for h in hosts}
     return FusedDraftPlacement.from_counts(
-        counts={h: [1] for h in hosts},
-        regions=regions,
-        # The target's window sub-pool hosts as a window.
-        hosted={h: "window" for h in hosts if h.startswith("window_")},
+        counts={h: [1] for h in hosts}, regions=regions
     )
 
 
@@ -115,7 +112,7 @@ _CONFIGS = {
     ),
     "swa_p16_draft_full_swa": _swa(
         page_size=16,
-        fused_draft=_draft("full", "window_32"),
+        fused_draft=_draft("full", "swa"),
         full_tokens=64 * 16,
         swa_tokens=64 * 16,
     ),
@@ -160,7 +157,7 @@ _CONFIGS = {
     ),
     "tri_p16_draft_swa": _tri(
         page_size=16,
-        fused_draft=_draft("window_32"),
+        fused_draft=_draft("swa"),
         full_tokens=64 * 16,
         swa_tokens=64 * 16,
     ),

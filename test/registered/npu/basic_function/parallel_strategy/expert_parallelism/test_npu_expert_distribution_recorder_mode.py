@@ -11,16 +11,14 @@ from sglang.test.ascend.test_ascend_utils import (
 )
 from sglang.test.ci.ci_register import register_npu_ci
 from sglang.test.test_utils import (
-    ADMIN_LAUNCH_ARGS_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
-    admin_post,
     popen_launch_server,
 )
 
-register_npu_ci(est_time=400, suite="extra-b-test-2-npu-a3")
-register_npu_ci(est_time=400, suite="nightly-test-2-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="base-b-test-2-npu-a3")
+register_npu_ci(est_time=400, suite="nightly-2-npu-a3", nightly=True)
 
 
 class TestExpertDistributionRecorderModeStatic(CustomTestCase):
@@ -46,8 +44,7 @@ class TestExpertDistributionRecorderModeStatic(CustomTestCase):
                 "--trust-remote-code",
                 "--attention-backend",
                 "ascend",
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
                 "--mem-fraction-static",
                 "0.8",
                 "--tp-size",
@@ -61,10 +58,11 @@ class TestExpertDistributionRecorderModeStatic(CustomTestCase):
                 "normal",
                 "--expert-distribution-recorder-mode",
                 cls.expert_distribution_recorder_mode,
-                *ADMIN_LAUNCH_ARGS_FOR_TEST,
             ],
             env={
-                "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+                "PYTORCH_NPU_ALLOC_CONF": (
+                    "expandable_segments:True,pin_memory_expandable_segments:True"
+                ),
                 "SGLANG_NPU_DISABLE_ACL_FORMAT_WEIGHT": "1",
                 "HCCL_BUFFSIZE": "1024",
                 "DEEPEP_HYBRID_DEPLOYMENT": "1",
@@ -80,9 +78,7 @@ class TestExpertDistributionRecorderModeStatic(CustomTestCase):
 
     def test_recorder_mode(self):
         # Start recording
-        admin_post(
-            f"{DEFAULT_URL_FOR_TEST}/start_expert_distribution_record",
-        )
+        requests.post(f"{DEFAULT_URL_FOR_TEST}/start_expert_distribution_record")
 
         response = requests.post(
             f"{DEFAULT_URL_FOR_TEST}/generate",
@@ -102,14 +98,10 @@ class TestExpertDistributionRecorderModeStatic(CustomTestCase):
         )
 
         # Stop recording
-        admin_post(
-            f"{DEFAULT_URL_FOR_TEST}/stop_expert_distribution_record",
-        )
+        requests.post(f"{DEFAULT_URL_FOR_TEST}/stop_expert_distribution_record")
 
         # Export the .pt file
-        admin_post(
-            f"{DEFAULT_URL_FOR_TEST}/dump_expert_distribution_record",
-        )
+        requests.post(f"{DEFAULT_URL_FOR_TEST}/dump_expert_distribution_record")
 
         # Check distribution_recorder_files
         distribution_recorder_suffixes = ["*.pt"]

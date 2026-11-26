@@ -171,9 +171,13 @@ def _get_dirty_gpus(gpu_indices):
 
 
 def _log_gpu_memory(gpu_indices):
-    """Log memory usage for all target GPUs."""
+    """Log memory usage for all target GPUs and return dirty GPU descriptions."""
+    dirty = []
     for idx, used, total, pct in _get_gpu_memory(gpu_indices):
         _log(f"  GPU {idx}: {used} MiB / {total} MiB ({pct:.0f}%)")
+        if pct >= MEMORY_THRESHOLD_PCT:
+            dirty.append(f"GPU {idx} ({pct:.0f}%)")
+    return dirty
 
 
 # /proc helpers

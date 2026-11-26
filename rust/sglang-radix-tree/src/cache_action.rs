@@ -67,8 +67,6 @@ pub struct FreeDeviceKV {
 #[derive(Debug)]
 pub struct FreeDeviceKVFullOnly {
     pub indices: Vec<Tensor>,
-    /// Whether the slots were a tree node's value rather than the inserting request's.
-    pub tree_owned: bool,
 }
 
 /// Update cache-side write bookkeeping after a node split:

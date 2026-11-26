@@ -55,7 +55,6 @@ from sglang.srt.mem_cache.layout.fused_draft import (
 )
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.mem_cache.pure_swa_radix_cache import PureSWARadixCache
-from sglang.srt.mem_cache.static_kv_storage import kv_storage_of
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.mem_cache.unified_cache.components import ComponentType
 from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
@@ -123,24 +122,13 @@ def _multi_layer_worker(pools_and_windows, *, front):
 
 
 def _swa_cache_params(*, sliding_window_size, draft_swa_window):
-    from sglang.srt.mem_cache.static_kv_storage import kv_storage_of
-
-    # A static window pool, as far as its kept tail goes.
-    allocator = SimpleNamespace(
-        storage=None,
-        window_pool_names=lambda: ("swa",),
-        target_window_pool=lambda: "swa",
-        get_kvcache=lambda: SimpleNamespace(request_window=None),
-    )
-    kv_storage_of(None, allocator).bind_window_retention(
-        sliding_window_size, {"swa": draft_swa_window}
-    )
     return CacheInitParams(
         disable=False,
         req_to_token_pool=None,
-        token_to_kv_pool_allocator=allocator,
+        token_to_kv_pool_allocator=None,
         page_size=1,
         sliding_window_size=sliding_window_size,
+        draft_window_reaches={"swa": draft_swa_window},
     )
 
 
@@ -195,12 +183,7 @@ class TestDraftBindingDispatch(CustomTestCase):
         )
         total = n_full * full_spec.entry_bytes() + n_swa * swa_spec.entry_bytes()
         placement = (
-            FusedDraftPlacement.from_counts(
-                counts={host: [1]},
-                regions={host: region},
-                # These pools name their window sub-pool `swa`.
-                hosted={"swa": "window"} if host == "swa" else None,
-            )
+            FusedDraftPlacement.from_counts(counts={host: [1]}, regions={host: region})
             if region is not None
             else None
         )
@@ -227,7 +210,7 @@ class TestDraftBindingDispatch(CustomTestCase):
             forward_stream=None,
         )
         # The target's KV storage, as far as draft binding reads it.
-        alloc.plan = plan_stand_in(pool, placement)
+        alloc.storage = SimpleNamespace(plan=plan_stand_in(pool, placement))
         return alloc
 
     def _run(
@@ -518,9 +501,6 @@ class TestSWARetainWindow(CustomTestCase):
             kvcache=kv_pool,
             need_sort=False,
         )
-        kv_storage_of(req_to_token_pool, allocator).bind_window_retention(
-            _WINDOW, {"swa": draft_swa_window}
-        )
         cache = cache_cls(
             CacheInitParams(
                 disable=disable,
@@ -528,6 +508,7 @@ class TestSWARetainWindow(CustomTestCase):
                 token_to_kv_pool_allocator=allocator,
                 page_size=1,
                 sliding_window_size=_WINDOW,
+                draft_window_reaches={"swa": draft_swa_window},
                 tree_slots=tree_slots_of(
                     (ComponentType.FULL, ComponentType.SWA),
                     window=max(_WINDOW, draft_swa_window),
@@ -572,7 +553,7 @@ class TestSWARetainWindow(CustomTestCase):
                 steps.append(
                     (
                         committed,
-                        req.kv.get_evicted_seqlen("swa"),
+                        req.kv.get_evicted_seqlen(ComponentType.SWA),
                         bool((mapping[read] > 0).all()),
                     )
                 )
@@ -637,7 +618,7 @@ class TestSWARetainWindow(CustomTestCase):
             req.extra_key = None
             with envs.SGLANG_OPT_UNIFIED_CACHE_FREE_OUT_OF_WINDOW_SLOTS.override(True):
                 checkpoint_kv_cache(req, cache)
-            self.assertEqual(req.kv.get_evicted_seqlen("swa"), frontier)
+            self.assertEqual(req.kv.get_evicted_seqlen(ComponentType.SWA), frontier)
             cache.unlock(req.lock)
             cache.sanity_check()
 

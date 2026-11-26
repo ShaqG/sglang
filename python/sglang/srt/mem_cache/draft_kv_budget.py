@@ -32,7 +32,7 @@ def resolve_dflash_draft_cell_size(
             speculative_draft_kv_cache_dtype=(
                 get_spec().speculative_draft_kv_cache_dtype
             ),
-            quant_config=None,
+            model=None,
             model_dtype=draft_model_config.dtype,
             is_draft_worker=True,
             is_dflash=True,

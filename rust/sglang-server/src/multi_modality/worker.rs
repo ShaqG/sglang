@@ -9,7 +9,7 @@ use sglang_processor::MmOutput;
 use sglang_processor::dynamo_multimodal::processor::{self as dynamo, PositionOutput};
 
 use super::encoded::{MRope, MmEncodedEntry, MmEncodedItem, MmMeta, MmMetaValue, MmModality};
-use crate::message::buffers::{Buffer, BufferData, BufferStore, ExternalBuffer};
+use crate::message::buffers::{Buffer, BufferData, BufferStore};
 use crate::message::config::MmSpec;
 use crate::message::request::{MmData, Request, RequestKind};
 use crate::message::types::TokenIds;
@@ -107,20 +107,6 @@ pub trait MmProcessor: Send + Sync {
         Ok(())
     }
 
-    /// One I/O-backed source the processor already holds (e.g. in a cache),
-    /// its bytes charged to `budget`. Runs on an async worker before the
-    /// source's blocking fetch is scheduled, so it must not block. `None`
-    /// leaves the source to [`MmProcessor::fetch_media`], which also reports
-    /// any failure.
-    fn cached_media(
-        &self,
-        _source: &str,
-        _modality: MmModality,
-        _budget: &crate::MediaByteBudget,
-    ) -> Option<bytes::Bytes> {
-        None
-    }
-
     /// Fetch one I/O-backed source, charging its bytes to `budget`; runs on
     /// the API runtime's blocking pool. `Ok(None)` leaves the source to the
     /// built-in fetcher (`http(s)://`, `file://` and absolute paths), which
@@ -134,66 +120,18 @@ pub trait MmProcessor: Send + Sync {
         Ok(None)
     }
 
-    /// How long one source's blocking fetch (this processor's, then the
-    /// built-in fetcher's) may take before the request fails without
-    /// waiting for it; the fetch thread finishes on its own. `None` waits
-    /// for the fetch to return.
-    fn media_fetch_deadline(&self) -> Option<std::time::Duration> {
-        None
-    }
-
     /// Finish item layout after caller hash overrides, before feature publication.
-    /// An item whose feature or metadata changes here must not keep a
-    /// precomputed `identity`.
     fn finalize(&self, _entry: &mut MmEncodedEntry) -> Result<(), String> {
         Ok(())
     }
 
     /// Observe a request's final result, as the scheduler will receive it
-    /// (with the caller's `mm_hashes` applied, finalized, validated, each
-    /// item's `identity` filled in, and its ids fitted to the context), on the
-    /// worker before the request is queued for the scheduler. Lets an
-    /// implementation hand the result on without waiting for the scheduler to
-    /// drain the request. The default does nothing.
+    /// (with the caller's `mm_hashes` applied, finalized, validated, and its
+    /// ids fitted to the context), on the worker before the request is queued
+    /// for the scheduler. Lets an implementation hand the result on without
+    /// waiting for the scheduler to drain the request. The default does
+    /// nothing.
     fn processed(&self, _request: MmRequestInfo<'_>, _output: &MmProcessOutput) {}
-
-    /// [`processed`](Self::processed), able to fail the request: `Err`
-    /// rejects it with the error's class, as a [`process`](Self::process)
-    /// error does, instead of queuing it for the scheduler. For an
-    /// implementation that hands the result on and must not leave the request
-    /// running when it cannot. The default observes the result with
-    /// `processed` and queues the request.
-    fn try_processed(
-        &self,
-        request: MmRequestInfo<'_>,
-        output: &MmProcessOutput,
-    ) -> Result<(), MediaError> {
-        self.processed(request, output);
-        Ok(())
-    }
-
-    /// Publish one request's item features in the processor's own transport
-    /// (e.g. a device memory pool the scheduler reads) instead of the worker's
-    /// inline or shm buffers: one entry per item, in order, `None` for a
-    /// feature it leaves to the worker (the default, for all of them). Once
-    /// any feature is published, the rest travel inline. Runs on the worker
-    /// after [`try_processed`](Self::try_processed); `Err` fails the request
-    /// (500).
-    fn publish_features(
-        &self,
-        items: &[MmEncodedItem],
-    ) -> Result<Vec<Option<Box<dyn ExternalBuffer>>>, String> {
-        Ok(items.iter().map(|_| None).collect())
-    }
-
-    /// Threads that run [`publish_features`](Self::publish_features), and lay
-    /// out the request's buffers, off the workers: a worker hands each request
-    /// on once [`try_processed`](Self::try_processed) accepted it, and
-    /// processes its next request while that one's features are published. 0
-    /// (the default) publishes on the worker.
-    fn feature_publishers(&self) -> usize {
-        0
-    }
 }
 
 /// The built-in path: SGLang's image pipeline (`sglang_processor::mm`) over the
@@ -251,7 +189,6 @@ fn encode_output(output: MmOutput) -> Result<MmProcessOutput, String> {
                 modality: MmModality::Image,
                 feature: tensor(item.feature)?,
                 hash: item.hash,
-                identity: None,
                 offsets: vec![span],
                 model_specific_data: item
                     .aux
@@ -396,57 +333,16 @@ fn place_features(
         .collect()
 }
 
-/// Each item's feature as `mm.feature.{i}` with its tensor's shape: the
-/// processor's published buffer, else the tensor inline.
-fn published_features(
-    features: Vec<Tensor>,
-    published: Vec<Option<Box<dyn ExternalBuffer>>>,
-) -> Vec<Buffer> {
-    features
-        .into_iter()
-        .zip(published)
-        .enumerate()
-        .map(|(i, (feature, external))| Buffer {
-            name: format!("mm.feature.{i}"),
-            shape: feature.shape,
-            store: match external {
-                Some(external) => BufferStore::External(external),
-                None => BufferStore::Inline(tensor_data(feature.data)),
-            },
-        })
-        .collect()
-}
-
-/// The ring's named buffers for one result: the per-item features (those
-/// `publisher` publishes, see [`published_features`], else see
+/// The ring's named buffers for one result: the per-item features (see
 /// [`place_features`]), the M-RoPE positions, and the `mm.meta` sidecar --
 /// always last, so a reader that finds it knows the rest is present.
-fn make_buffers(
-    entry: MmEncodedEntry,
-    feature_shm: bool,
-    publisher: Option<&dyn MmProcessor>,
-) -> Result<Vec<Buffer>, String> {
+fn make_buffers(entry: MmEncodedEntry, feature_shm: bool) -> Result<Vec<Buffer>, String> {
     let meta = MmMeta::of(&entry)?.encode()?;
     let MmEncodedEntry { items, mrope, .. } = entry;
-    let published = match publisher {
-        Some(publisher) => publisher.publish_features(&items)?,
-        None => Vec::new(),
-    };
-    if publisher.is_some() && published.len() != items.len() {
-        return Err(format!(
-            "the processor published {} entries for {} features",
-            published.len(),
-            items.len()
-        ));
-    }
-    let features: Vec<Tensor> = items.into_iter().map(|item| item.feature).collect();
-    let mut buffers = if published.iter().any(Option::is_some) {
-        published_features(features, published)
-    } else {
-        place_features(features, feature_shm, |_| {
-            crate::utils::shm::unique_name("mm")
-        })
-    };
+    let features = items.into_iter().map(|item| item.feature).collect();
+    let mut buffers = place_features(features, feature_shm, |_| {
+        crate::utils::shm::unique_name("mm")
+    });
     if let Some(mrope) = mrope {
         let len = mrope.positions.len() / 3;
         buffers.push(Buffer::inline_shaped(
@@ -459,38 +355,17 @@ fn make_buffers(
     Ok(buffers)
 }
 
-/// One request's result once [`MmProcessor::try_processed`] accepted it,
-/// before its buffers exist.
-struct Processed {
-    input_ids: TokenIds,
-    result: MmEncodedEntry,
-    /// Whether intake will take the ids. A prompt it will reject keeps its
-    /// features inline: nothing to publish.
-    fits: bool,
-}
-
-impl Processed {
-    /// The final expanded ids and the buffers to ride the ring; an
-    /// unplaceable buffer is the server's fault, `Internal` (a 500).
-    fn into_buffers(self, ctx: &MmContext) -> Result<(TokenIds, Vec<Buffer>), Error> {
-        let publisher = self.fits.then_some(ctx.processor.as_ref());
-        let buffers =
-            make_buffers(self.result, ctx.feature_shm, publisher).map_err(Error::Internal)?;
-        Ok((self.input_ids, buffers))
-    }
-}
-
-/// Run the processor for one request, up to its buffers
-/// ([`Processed::into_buffers`]). `Err` rejects the request back to the
-/// client: the processor's [`MediaError`] as `Encode`, which keeps its status
-/// class, and a malformed processor result -- the server's fault -- as
-/// `Internal` (a 500).
+/// Run the processor for one request. `Ok` returns the final expanded ids and
+/// the buffers to ride the ring; `Err` rejects the request back to the client:
+/// the processor's [`MediaError`] as `Encode`, which keeps its status class,
+/// and a malformed processor result or an unplaceable buffer -- the server's
+/// fault -- as `Internal` (a 500).
 fn process(
     ctx: &MmContext,
     request: MmRequestInfo<'_>,
     input_ids: TokenIds,
     mut mm: MmData,
-) -> Result<Processed, Error> {
+) -> Result<(TokenIds, Vec<Buffer>), Error> {
     let caller_hashes = std::mem::take(&mut mm.mm_hashes);
     let mut output = ctx
         .processor
@@ -511,10 +386,6 @@ fn process(
         .result
         .validate(output.input_ids.len())
         .map_err(Error::Internal)?;
-    output
-        .result
-        .resolve_identities()
-        .map_err(Error::Internal)?;
     // Intake fits the ids to the context (`check_total_tokens`) before the
     // scheduler sees them; fit them first, so `processed` sees the same ids. A
     // prompt intake will reject is not observed.
@@ -523,38 +394,10 @@ fn process(
         .as_ref()
         .is_none_or(|limits| fit_input(&mut output.input_ids, limits).is_ok());
     if fits {
-        ctx.processor
-            .try_processed(request, &output)
-            .map_err(Error::Encode)?;
+        ctx.processor.processed(request, &output);
     }
-    Ok(Processed {
-        input_ids: output.input_ids,
-        result: output.result,
-        fits,
-    })
-}
-
-/// Write a request's outcome back and advance its FSM: on success, the
-/// expanded ids and the buffers laid out from `processed` (`EncodeDone` ->
-/// PreSendValidating); else `Error` -> Failed, which intake rejects to the
-/// client with the error's class.
-fn complete(ctx: &MmContext, req: &mut Request, processed: Result<Processed, Error>) {
-    let outcome = processed.and_then(|processed| processed.into_buffers(ctx));
-    let event = match (outcome, &mut req.kind) {
-        (Ok((input_ids, buffers)), RequestKind::Generate(g)) => {
-            tracing::debug!(rid = %req.rid, tokens = input_ids.len(), "mm: processed");
-            g.input_ids = Some(input_ids);
-            g.mm_buffers = buffers;
-            Event::EncodeDone
-        }
-        // Only a generate request gets processed.
-        (Ok(_), _) => Event::Error(Error::Internal(
-            "non-generate request in the mm pool".into(),
-        )),
-        // Intake logs the failure when it fails the request.
-        (Err(error), _) => Event::Error(error),
-    };
-    let _ = req.state.apply(event);
+    let buffers = make_buffers(output.result, ctx.feature_shm).map_err(Error::Internal)?;
+    Ok((output.input_ids, buffers))
 }
 
 /// Boot-time wiring of the MM path, held privately by the `Runtime` for the
@@ -576,9 +419,6 @@ pub struct MmWorker {
     mm_rx: flume::Receiver<Request>,
     tm_tx: flume::Sender<TmEvent>,
     ctx: Arc<MmContext>,
-    /// The feature publishers' queue, when the processor has publishers
-    /// ([`MmProcessor::feature_publishers`]).
-    publish_tx: Option<flume::Sender<Publication>>,
 }
 
 impl MmWorker {
@@ -587,21 +427,7 @@ impl MmWorker {
         tm_tx: flume::Sender<TmEvent>,
         ctx: Arc<MmContext>,
     ) -> Self {
-        Self {
-            mm_rx,
-            tm_tx,
-            ctx,
-            publish_tx: None,
-        }
-    }
-
-    /// Hand each processed request to the [`MmPublisher`]s behind
-    /// `publish_tx` instead of laying out its buffers here.
-    pub(crate) fn publishing_to(self, publish_tx: flume::Sender<Publication>) -> Self {
-        Self {
-            publish_tx: Some(publish_tx),
-            ..self
-        }
+        Self { mm_rx, tm_tx, ctx }
     }
 }
 
@@ -610,15 +436,15 @@ impl Runnable for MmWorker {
     /// shutdown). One request at a time, so the pool size bounds MM
     /// concurrency. Mirrors `TokenizerWorker`: carve the work out of the
     /// request, process, write the result back, advance the FSM
-    /// (see [`complete`]), and return the request as `Encoded`. With
-    /// publishers, a processed request goes to them instead, and they finish
-    /// it.
+    /// (`EncodeDone` -> PreSendValidating, or `Error` -> Failed, which intake
+    /// rejects to the client; see [`process`] for the error's class), and
+    /// return the request as `Encoded`.
     fn run(self) {
         while let Ok(mut req) = self.mm_rx.recv() {
             // A request is never dropped here: a kind this pool cannot serve
             // goes back as `Failed`, so intake rejects it and releases its
             // tracking entry instead of leaving the client hung.
-            let processed = if let RequestKind::Generate(g) = &mut req.kind {
+            let event = if let RequestKind::Generate(g) = &mut req.kind {
                 // Move the processor's inputs out: the unexpanded ids (always
                 // present by `Encoding`; the expanded ids replace them) and the
                 // media, so the processor owns the bytes without a copy. `text`
@@ -630,65 +456,25 @@ impl Runnable for MmWorker {
                     runtime_rid: req.rid.as_str(),
                     bootstrap_room: g.bootstrap_room,
                 };
-                process(&self.ctx, request, input_ids, mm)
+                match process(&self.ctx, request, input_ids, mm) {
+                    Ok((input_ids, buffers)) => {
+                        tracing::debug!(rid = %req.rid, tokens = input_ids.len(), "mm: processed");
+                        g.input_ids = Some(input_ids);
+                        g.mm_buffers = buffers;
+                        Event::EncodeDone
+                    }
+                    Err(error) => {
+                        tracing::warn!(rid = %req.rid, %error, "mm processing rejected");
+                        Event::Error(error)
+                    }
+                }
             } else {
                 tracing::error!(rid = %req.rid, "mm pool received a non-generate request");
-                Err(Error::Internal(
+                Event::Error(Error::Internal(
                     "non-generate request in the mm pool".into(),
                 ))
             };
-            let processed = match (processed, &self.publish_tx) {
-                (Ok(processed), Some(publish_tx)) => {
-                    if publish_tx.send(Publication { req, processed }).is_err() {
-                        return; // publishers gone: shutdown
-                    }
-                    continue;
-                }
-                (processed, _) => processed,
-            };
-            complete(&self.ctx, &mut req, processed);
-            if self.tm_tx.send(TmEvent::Encoded(req)).is_err() {
-                return; // to-scheduler gone: shutdown
-            }
-        }
-    }
-}
-
-/// A processed request on its way to a publisher.
-pub(crate) struct Publication {
-    req: Request,
-    processed: Processed,
-}
-
-/// One feature publisher ([`MmProcessor::feature_publishers`]), spawned with
-/// the workers by `Runtime::start_mm_workers_with_processor`: lays out each
-/// processed request's buffers, publishing its features, and returns it as
-/// `Encoded`.
-pub(crate) struct MmPublisher {
-    publish_rx: flume::Receiver<Publication>,
-    tm_tx: flume::Sender<TmEvent>,
-    ctx: Arc<MmContext>,
-}
-
-impl MmPublisher {
-    pub(crate) fn new(
-        publish_rx: flume::Receiver<Publication>,
-        tm_tx: flume::Sender<TmEvent>,
-        ctx: Arc<MmContext>,
-    ) -> Self {
-        Self {
-            publish_rx,
-            tm_tx,
-            ctx,
-        }
-    }
-}
-
-impl Runnable for MmPublisher {
-    /// Drain until every worker, each holding a sender, is gone.
-    fn run(self) {
-        while let Ok(Publication { mut req, processed }) = self.publish_rx.recv() {
-            complete(&self.ctx, &mut req, Ok(processed));
+            let _ = req.state.apply(event);
             if self.tm_tx.send(TmEvent::Encoded(req)).is_err() {
                 return; // to-scheduler gone: shutdown
             }
@@ -705,7 +491,6 @@ mod tests {
 
     use super::*;
     use crate::message::buffers::find;
-    use crate::message::config::HiddenStatesMode;
     use crate::utils::shm::{shm_path, unique_name};
 
     /// An external-style processor: one image item with a caller-shaped
@@ -727,7 +512,6 @@ mod tests {
                             data: TensorData::F32(vec![1.0]),
                         },
                         hash: 7,
-                        identity: None,
                         offsets: self.offsets.clone(),
                         model_specific_data: BTreeMap::from([(
                             "clip_index".to_owned(),
@@ -830,7 +614,6 @@ mod tests {
                 data: TensorData::F32(feature),
             },
             hash,
-            identity: None,
             offsets: vec![span],
             model_specific_data: BTreeMap::from([(
                 "image_grid_thw".to_owned(),
@@ -858,144 +641,12 @@ mod tests {
         rmpv::decode::read_value(&mut bytes.as_slice()).unwrap()
     }
 
-    /// A feature a [`Publishing`] processor took, counting its drops.
-    #[derive(Debug)]
-    struct Published(Arc<std::sync::atomic::AtomicUsize>);
-
-    impl Drop for Published {
-        fn drop(&mut self) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    impl ExternalBuffer for Published {
-        fn into_py(
-            self: Box<Self>,
-            _py: pyo3::Python<'_>,
-        ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-            unreachable!("these tests never cross to Python")
-        }
-    }
-
-    /// Publishes the features `take` selects, by item index; `entries`
-    /// overrides how many entries it returns.
-    struct Publishing {
-        take: fn(usize) -> bool,
-        entries: Option<usize>,
-        dropped: Arc<std::sync::atomic::AtomicUsize>,
-    }
-
-    impl Publishing {
-        fn new(take: fn(usize) -> bool, dropped: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
-            Self {
-                take,
-                entries: None,
-                dropped: dropped.clone(),
-            }
-        }
-    }
-
-    impl MmProcessor for Publishing {
-        fn process(&self, _ids: TokenIds, _mm: MmData) -> Result<MmProcessOutput, MediaError> {
-            unreachable!("make_buffers only publishes")
-        }
-
-        fn publish_features(
-            &self,
-            items: &[MmEncodedItem],
-        ) -> Result<Vec<Option<Box<dyn ExternalBuffer>>>, String> {
-            Ok((0..self.entries.unwrap_or(items.len()))
-                .map(|i| {
-                    (self.take)(i).then(|| {
-                        Box::new(Published(self.dropped.clone())) as Box<dyn ExternalBuffer>
-                    })
-                })
-                .collect())
-        }
-    }
-
-    /// Published features ride as `mm.feature.{i}` external buffers with
-    /// their tensors' shapes; the M-RoPE positions and the sidecar stay inline
-    /// and last, exactly as without publication.
-    #[test]
-    fn published_features_ride_as_external_buffers() {
-        let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let publisher = Publishing::new(|_| true, &dropped);
-        let buffers = make_buffers(qwen_entry(), false, Some(&publisher)).unwrap();
-        let names: Vec<&str> = buffers.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["mm.feature.0", "mm.feature.1", "mm.mrope", "mm.meta"]
-        );
-        let shapes: Vec<&[usize]> = buffers[..2].iter().map(|b| b.shape.as_slice()).collect();
-        assert_eq!(shapes, [&[2, 2][..], &[1, 2][..]]);
-        assert!(
-            buffers[..2]
-                .iter()
-                .all(|b| matches!(b.store, BufferStore::External(_)))
-        );
-        let inline = make_buffers(qwen_entry(), false, None).unwrap();
-        assert_eq!(decoded_meta(&buffers), decoded_meta(&inline));
-        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 0);
-        drop(buffers);
-        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 2);
-    }
-
-    /// A feature the processor leaves travels inline beside the published
-    /// ones, even under `feature_shm`; with none published the worker's own
-    /// layout applies; a wrong entry count fails the request and drops (frees)
-    /// what was published.
-    #[test]
-    fn unpublished_features_travel_inline_and_a_miscount_fails() {
-        let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let first_only = Publishing::new(|i| i == 0, &dropped);
-        let buffers = make_buffers(qwen_entry(), true, Some(&first_only)).unwrap();
-        assert!(matches!(
-            find(&buffers, "mm.feature.0").unwrap().store,
-            BufferStore::External(_)
-        ));
-        let second = find(&buffers, "mm.feature.1").unwrap();
-        assert!(matches!(
-            second.store,
-            BufferStore::Inline(BufferData::F32(_))
-        ));
-        assert_eq!(second.shape, [1, 2]);
-        drop(buffers);
-        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 1);
-
-        let none = Publishing::new(|_| false, &dropped);
-        let buffers = make_buffers(qwen_entry(), false, Some(&none)).unwrap();
-        assert_eq!(
-            buffers_layout(&buffers),
-            buffers_layout(&make_buffers(qwen_entry(), false, None).unwrap())
-        );
-
-        let short = Publishing {
-            entries: Some(1),
-            ..Publishing::new(|_| true, &dropped)
-        };
-        let error = make_buffers(qwen_entry(), false, Some(&short)).unwrap_err();
-        assert!(
-            error.contains("published 1 entries for 2 features"),
-            "{error}"
-        );
-        assert_eq!(dropped.load(std::sync::atomic::Ordering::Relaxed), 2);
-    }
-
-    /// Each buffer's name and whether it is inline.
-    fn buffers_layout(buffers: &[Buffer]) -> Vec<(String, bool)> {
-        buffers
-            .iter()
-            .map(|b| (b.name.clone(), matches!(b.store, BufferStore::Inline(_))))
-            .collect()
-    }
-
     /// Inline: one shaped `mm.feature.{i}` per item owning its own tensor, the
     /// M-RoPE positions as `[3, len]`, and the sidecar last, decoding to named
     /// maps with the item metadata in order.
     #[test]
     fn buffers_are_shaped_features_mrope_and_meta_sidecar() {
-        let buffers = make_buffers(qwen_entry(), false, None).unwrap();
+        let buffers = make_buffers(qwen_entry(), false).unwrap();
         let names: Vec<&str> = buffers.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(
             names,
@@ -1170,16 +821,6 @@ mod tests {
         bootstrap_room: None,
     };
 
-    /// One request's ids and buffers, as the worker gets them: [`process`],
-    /// then [`Processed::into_buffers`].
-    fn process_to_buffers(
-        ctx: &MmContext,
-        input_ids: TokenIds,
-        mm: MmData,
-    ) -> Result<(TokenIds, Vec<Buffer>), Error> {
-        process(ctx, NO_REQUEST, input_ids, mm)?.into_buffers(ctx)
-    }
-
     /// An external processor's result rides the same buffers: its tensor's
     /// dtype and shape are kept, the caller hash override applies, and the
     /// sidecar carries its scalar metadata.
@@ -1196,7 +837,7 @@ mod tests {
             mm_hashes: vec!["2a".to_owned()],
             ..Default::default()
         };
-        let (input_ids, buffers) = process_to_buffers(&ctx, vec![1, 2], mm).unwrap();
+        let (input_ids, buffers) = process(&ctx, NO_REQUEST, vec![1, 2], mm).unwrap();
         assert_eq!(input_ids, [1, 2]);
         assert_eq!(find(&buffers, "mm.feature.0").unwrap().shape, [1]);
         assert!(find(&buffers, "mm.mrope").is_none());
@@ -1207,17 +848,12 @@ mod tests {
     }
 
     /// Finalization sees the caller's hashes and is validated; `processed`
-    /// observes only a valid finalized result, with each item's identity
-    /// already hashed over its final feature: the identity the scheduler
-    /// receives in `mm.meta`.
+    /// observes only a valid finalized result.
     #[test]
     fn finalization_runs_after_caller_hashes_and_is_validated() {
-        /// Each item's hash and identity, as `processed` saw them.
-        type Observed = Vec<(u64, [u8; 32])>;
-
         struct FinalizingProcessor {
             final_end: u32,
-            processed: std::sync::Mutex<Vec<Observed>>,
+            processed: std::sync::Mutex<Vec<Vec<u64>>>,
         }
 
         impl MmProcessor for FinalizingProcessor {
@@ -1240,7 +876,6 @@ mod tests {
                         data: TensorData::F32(vec![2.0]),
                     },
                     hash: parent_hash + 2,
-                    identity: None,
                     offsets: vec![(1, self.final_end)],
                     model_specific_data: BTreeMap::new(),
                 });
@@ -1248,15 +883,8 @@ mod tests {
             }
 
             fn processed(&self, _request: MmRequestInfo<'_>, output: &MmProcessOutput) {
-                let items = output.result.items.iter();
-                let observed = items
-                    .map(|item| {
-                        let identity = item.identity.expect("resolved before `processed`");
-                        assert_eq!(Ok(identity), item.hash_identity());
-                        (item.hash, identity)
-                    })
-                    .collect();
-                self.processed.lock().unwrap().push(observed);
+                let hashes = output.result.items.iter().map(|item| item.hash).collect();
+                self.processed.lock().unwrap().push(hashes);
             }
         }
 
@@ -1266,8 +894,9 @@ mod tests {
                 processed: Default::default(),
             });
             let ctx = MmContext::with_processor(processor.clone(), false);
-            let result = process_to_buffers(
+            let result = process(
                 &ctx,
+                NO_REQUEST,
                 vec![1, 2],
                 MmData {
                     mm_hashes: vec!["2a".to_owned()],
@@ -1280,24 +909,14 @@ mod tests {
                 assert!(processed.is_empty(), "an invalid result is not observed");
                 continue;
             }
-            let [observed] = processed.as_slice() else {
-                panic!("observed once: {processed:?}");
-            };
-            let hashes: Vec<_> = observed.iter().map(|(hash, _)| *hash).collect();
-            assert_eq!(hashes, [43, 44]);
-            assert_ne!(observed[0].1, observed[1].1);
+            assert_eq!(processed, [vec![43, 44]]);
             let (ids, buffers) = result.expect("valid finalized items");
             assert_eq!(ids, [1, 2]);
             assert!(find(&buffers, "mm.feature.1").is_some());
             let meta: serde_json::Value = rmpv::ext::from_value(decoded_meta(&buffers)).unwrap();
             assert_eq!(meta["items"].as_array().unwrap().len(), 2);
-            for (index, (hash, identity)) in observed.iter().enumerate() {
-                assert_eq!(meta["items"][index]["hash"].as_u64(), Some(*hash));
-                assert_eq!(
-                    meta["items"][index]["identity"],
-                    serde_json::json!(identity)
-                );
-            }
+            assert_eq!(meta["items"][0]["hash"].as_u64(), Some(43));
+            assert_eq!(meta["items"][1]["hash"].as_u64(), Some(44));
         }
     }
 
@@ -1377,9 +996,8 @@ mod tests {
         assert!(find(&g.mm_buffers, "mm.meta").is_some());
 
         // The processor's own failure and a malformed result (span past the
-        // prompt) fail the request in place as the server's fault; a refusal,
-        // in processing or once processed, as the client's. Intake logs the
-        // failure, so the worker does not.
+        // prompt) fail the request in place as the server's fault; a refusal
+        // as the client's.
         let failing: Arc<dyn MmProcessor> = Arc::new(FailingProcessor(MediaError::Server(
             "audio decode: Cannot allocate memory".into(),
         )));
@@ -1389,21 +1007,14 @@ mod tests {
         });
         let refusing: Arc<dyn MmProcessor> =
             Arc::new(FailingProcessor(MediaError::Client("bad image".into())));
-        let refusing_processed: Arc<dyn MmProcessor> = Arc::new(RefusingProcessed);
-        for (processor, server_fault) in [
-            (failing, true),
-            (malformed, true),
-            (refusing, false),
-            (refusing_processed, false),
-        ] {
+        for (processor, server_fault) in [(failing, true), (malformed, true), (refusing, false)] {
             let (mm_tx, mm_rx) = flume::unbounded::<Request>();
             let (tm_tx, tm_rx) = flume::unbounded::<TmEvent>();
             let ctx = Arc::new(MmContext::with_processor(processor, false));
+            let worker = std::thread::spawn(move || MmWorker::new(mm_rx, tm_tx, ctx).run());
             mm_tx.send(encoding_req("bad", vec![1, 2])).unwrap();
             drop(mm_tx);
-            let logs = crate::utils::logging::capture_logs();
-            MmWorker::new(mm_rx, tm_tx, ctx).run();
-            assert_eq!(logs.text(), "");
+            worker.join().unwrap();
             let TmEvent::Encoded(req) = tm_rx.try_recv().expect("returned") else {
                 panic!("expected Encoded");
             };
@@ -1411,115 +1022,6 @@ mod tests {
                 panic!("{:?}", req.state);
             };
             assert_eq!(error.is_server_fault(), server_fault, "{error:?}");
-        }
-    }
-
-    /// With a publisher, the worker hands each processed request on and
-    /// processes its next one while the last one's features are still being
-    /// published; the publisher returns each request `Encoded`, its features
-    /// published.
-    #[test]
-    fn a_worker_processes_its_next_request_while_a_publisher_publishes() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-        use crate::utils::fsm::RequestState;
-
-        /// Publishes every feature, the first request's only once the next
-        /// request was processed.
-        struct Gated {
-            processed: AtomicUsize,
-            next_processed: (flume::Sender<()>, flume::Receiver<()>),
-            waited: AtomicBool,
-            dropped: Arc<AtomicUsize>,
-        }
-        impl MmProcessor for Gated {
-            fn process(
-                &self,
-                input_ids: TokenIds,
-                mm: MmData,
-            ) -> Result<MmProcessOutput, MediaError> {
-                let output = ExternalProcessor {
-                    shape: vec![1],
-                    offsets: vec![(1, 1)],
-                }
-                .process(input_ids, mm)?;
-                if self.processed.fetch_add(1, Ordering::SeqCst) == 1 {
-                    self.next_processed.0.send(()).unwrap();
-                }
-                Ok(output)
-            }
-            fn publish_features(
-                &self,
-                items: &[MmEncodedItem],
-            ) -> Result<Vec<Option<Box<dyn ExternalBuffer>>>, String> {
-                if !self.waited.swap(true, Ordering::SeqCst) {
-                    self.next_processed
-                        .1
-                        .recv_timeout(std::time::Duration::from_secs(10))
-                        .map_err(|_| "the worker waited for the publisher".to_owned())?;
-                }
-                Ok(items
-                    .iter()
-                    .map(|_| Some(Box::new(Published(self.dropped.clone())) as _))
-                    .collect())
-            }
-            fn feature_publishers(&self) -> usize {
-                1
-            }
-        }
-
-        let ctx = Arc::new(MmContext::with_processor(
-            Arc::new(Gated {
-                processed: AtomicUsize::new(0),
-                next_processed: flume::unbounded(),
-                waited: AtomicBool::new(false),
-                dropped: Arc::new(AtomicUsize::new(0)),
-            }),
-            false,
-        ));
-        let (mm_tx, mm_rx) = flume::unbounded::<Request>();
-        let (tm_tx, tm_rx) = flume::unbounded::<TmEvent>();
-        let (publish_tx, publish_rx) = flume::bounded(1);
-        let publisher = std::thread::spawn({
-            let (tm_tx, ctx) = (tm_tx.clone(), ctx.clone());
-            move || MmPublisher::new(publish_rx, tm_tx, ctx).run()
-        });
-        let worker = std::thread::spawn(move || {
-            MmWorker::new(mm_rx, tm_tx, ctx)
-                .publishing_to(publish_tx)
-                .run()
-        });
-        for rid in ["first", "next"] {
-            mm_tx.send(encoding_req(rid, vec![1, 2])).unwrap();
-        }
-        drop(mm_tx); // the worker exits after draining, then the publisher
-        worker.join().unwrap();
-        publisher.join().unwrap();
-
-        let returned: Vec<Request> = tm_rx
-            .try_iter()
-            .map(|event| {
-                let TmEvent::Encoded(req) = event else {
-                    panic!("expected Encoded");
-                };
-                req
-            })
-            .collect();
-        let rids: Vec<&str> = returned.iter().map(|req| req.rid.as_str()).collect();
-        assert_eq!(rids, ["first", "next"]);
-        for req in &returned {
-            assert!(
-                matches!(req.state, RequestState::PreSendValidating),
-                "{:?}",
-                req.state
-            );
-            let RequestKind::Generate(g) = &req.kind else {
-                panic!("generate")
-            };
-            assert!(matches!(
-                find(&g.mm_buffers, "mm.feature.0").unwrap().store,
-                BufferStore::External(_)
-            ));
         }
     }
 
@@ -1533,27 +1035,6 @@ mod tests {
             _mm: MmData,
         ) -> Result<MmProcessOutput, MediaError> {
             Err(self.0.clone())
-        }
-    }
-
-    /// A processor that refuses each valid result once processed.
-    struct RefusingProcessed;
-
-    impl MmProcessor for RefusingProcessed {
-        fn process(&self, input_ids: TokenIds, mm: MmData) -> Result<MmProcessOutput, MediaError> {
-            ExternalProcessor {
-                shape: vec![1],
-                offsets: vec![(1, 1)],
-            }
-            .process(input_ids, mm)
-        }
-
-        fn try_processed(
-            &self,
-            _request: MmRequestInfo<'_>,
-            _output: &MmProcessOutput,
-        ) -> Result<(), MediaError> {
-            Err(MediaError::Client("cannot hand the result on".into()))
         }
     }
 
@@ -1664,10 +1145,10 @@ mod tests {
                 context_len: 8,
                 num_reserved_tokens: 0,
                 allow_auto_truncate,
-                return_hidden_states_mode: HiddenStatesMode::Null,
+                enable_return_hidden_states: false,
             });
             let (input_ids, _) =
-                process_to_buffers(&ctx, (0..12).collect(), MmData::default()).unwrap();
+                process(&ctx, NO_REQUEST, (0..12).collect(), MmData::default()).unwrap();
             assert_eq!(input_ids, (0..forwarded).collect::<TokenIds>());
             let seen = processor.0.lock().unwrap();
             assert_eq!(seen.len(), observed);

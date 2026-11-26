@@ -46,6 +46,7 @@ from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.mistral import MistralForCausalLMMistralFormat
 from sglang.srt.models.mistral_large_3 import MistralLarge3ForCausalLM
 
+USE_XFORMERS_OPS = False
 PATCH_MERGE = "patch_merge"
 
 
@@ -432,13 +433,20 @@ class VisionTransformer(nn.Module):
         freqs_cis = self.freqs_cis[positions[:, 0], positions[:, 1]]
 
         # pass through Transformer with a block diagonal mask delimiting images
-        from transformers.models.pixtral.modeling_pixtral import (
-            generate_block_attention_mask,
-        )
+        if USE_XFORMERS_OPS:
+            from xformers import ops as xops
 
-        mask = generate_block_attention_mask(
-            [p.shape[-2] * p.shape[-1] for p in patch_embeds_list], patch_embeds
-        )
+            mask = xops.fmha.attn_bias.BlockDiagonalMask.from_seqlens(
+                [p.shape[-2] * p.shape[-1] for p in patch_embeds_list],
+            )
+        else:
+            from transformers.models.pixtral.modeling_pixtral import (
+                generate_block_attention_mask,
+            )
+
+            mask = generate_block_attention_mask(
+                [p.shape[-2] * p.shape[-1] for p in patch_embeds_list], patch_embeds
+            )
         return self.transformer(patch_embeds, mask=mask, freqs_cis=freqs_cis)
 
 
@@ -695,11 +703,16 @@ class Attention(nn.Module):
 
         q, k = apply_rotary_emb_vit(q, k, freqs_cis=freqs_cis)
 
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-        out = nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
-        out = out.transpose(1, 2)
+        if USE_XFORMERS_OPS:
+            from xformers import ops as xops
+
+            out = xops.memory_efficient_attention(q, k, v, attn_bias=mask)
+        else:
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+            out = nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+            out = out.transpose(1, 2)
 
         out = out.reshape(batch, patches, self.n_heads * self.head_dim)
         return self.wo(out)

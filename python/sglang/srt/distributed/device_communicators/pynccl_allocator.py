@@ -362,7 +362,12 @@ class SymmetricMemoryContext:
                 "graph_pool_id is not set under graph capture"
             )
             # Pause graph memory pool to use symmetric memory with cuda graph
-            torch._C._cuda_endAllocateToPool(_cur_device, _graph_pool_id)
+            if after_2_8_0:
+                torch._C._cuda_endAllocateToPool(_cur_device, _graph_pool_id)
+            else:
+                torch._C._cuda_endAllocateCurrentStreamToPool(
+                    _cur_device, _graph_pool_id
+                )
 
         torch._C._cuda_beginAllocateCurrentThreadToPool(
             self._device_index, self._pool_id
@@ -381,7 +386,12 @@ class SymmetricMemoryContext:
         self._register_segments_for_comm()
 
         if self.is_graph_capture:
-            torch._C._cuda_beginAllocateCurrentThreadToPool(_cur_device, _graph_pool_id)
+            if after_2_8_0:
+                torch._C._cuda_beginAllocateCurrentThreadToPool(
+                    _cur_device, _graph_pool_id
+                )
+            else:
+                torch._C._cuda_beginAllocateToPool(_cur_device, _graph_pool_id)
 
         global _active_symmetric_memory_context
         _active_symmetric_memory_context = None

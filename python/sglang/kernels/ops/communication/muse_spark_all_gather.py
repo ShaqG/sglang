@@ -1,7 +1,7 @@
-"""Multicast all-gather of bf16 column slices through the TP symmetric workspace.
+"""Multicast all-gather of bf16 column slices through the CustomAllReduceV2 push workspace.
 
 ``out[:, rank slice] = local`` (+ b) (+ c) for every rank's ``[M, N / world]``
-slice: one kernel multicast-stores the slice into every peer's push slots
+slice: one kernel multicast-stores the slice into every peer's push workspace
 and Lamport-spins the full rows together. Any TP world size; needs the plane's
 multicast mapping. The column-parallel projection that produces the slices
 lives in ``sglang.srt.layers.communication.muse_spark_gemm_ag``.
@@ -27,8 +27,8 @@ from sglang.kernels.jit.utils import (
 if TYPE_CHECKING:
     from tvm_ffi.module import Module
 
-    from sglang.srt.distributed.device_communicators.symm_workspace import (
-        WorkspaceLease,
+    from sglang.srt.distributed.device_communicators.custom_all_reduce_v2 import (
+        CustomAllReduceV2,
     )
 
 SMALL_PROJECTION_MAX_TOKENS = 8
@@ -50,9 +50,18 @@ def _jit_module(n: int, world_size: int) -> Module:
 
 
 def gemm_ag_supported(
-    comm: Optional[WorkspaceLease], x: torch.Tensor, weight: torch.Tensor
+    comm: Optional[CustomAllReduceV2], x: torch.Tensor, weight: torch.Tensor
 ) -> bool:
-    if comm is None or not comm.has_multicast or comm.world_size < 2:
+    from sglang.srt.distributed.device_communicators.custom_all_reduce_v2 import (
+        CustomAllReduceV2,
+    )
+
+    if (
+        not isinstance(comm, CustomAllReduceV2)
+        or comm.disabled
+        or not comm.has_multicast
+        or comm.world_size < 2
+    ):
         return False
     if x.dtype != torch.bfloat16 or weight.dtype != torch.bfloat16 or x.dim() != 2:
         return False
@@ -76,13 +85,14 @@ def gemm_ag_supported(
         )
         and weight.shape[1] == k
         and n % (comm.world_size * _VEC) == 0
-        and m * n * 2 <= comm.request.push_slot_bytes
+        and m * n * 2 <= comm.max_push_size
+        and comm.config.num_push_blocks >= 2
         and weight.is_contiguous()
     )
 
 
 def all_gather(
-    comm: WorkspaceLease,
+    comm: CustomAllReduceV2,
     local: torch.Tensor,
     out: torch.Tensor,
     b: Optional[torch.Tensor] = None,
@@ -90,6 +100,6 @@ def all_gather(
 ) -> torch.Tensor:
     """``out[:, rank slice] = local`` gathered from every rank, (+ b) (+ c)."""
     _jit_module(out.shape[1], comm.world_size).run(
-        comm.get_communicator(), local.contiguous(), b, c, out
+        comm.obj, local.contiguous(), b, c, out
     )
     return out

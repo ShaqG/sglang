@@ -49,11 +49,7 @@ class ARCluster(DisaggCluster):
 
     # -- internals -----------------------------------------------------------
 
-    def _launch_servers(self) -> None:
-        self._launch_ar_encoder()
-        self._launch_diffusion_server()
-
-    def _launch_ar_encoder(self) -> None:
+    def _launch_roles(self) -> None:
         gpus = self.gpu_layout["ar"]
         log = _LOG_DIR / "ar.log"
         self._logs["ar"] = log
@@ -88,21 +84,20 @@ class ARCluster(DisaggCluster):
             "--mem-fraction-static",
             "0.4",
         ]
-        proc = self._start_proc(cmd, log)
+        self._start_proc(cmd, log)
 
         try:
             wait_for_server_health(
                 f"http://{HOST}:{self.ar_port}",
                 path="/v1/models",
                 timeout=self.startup_timeout,
-                process=proc,
             )
         except Exception as e:
             raise RuntimeError(
                 f"AR model failed to start for {self.name}. Log tail:\n{_tail_log(log)}"
             ) from e
 
-    def _launch_diffusion_server(self) -> None:
+    def _launch_server_head(self) -> None:
         gpus = self.gpu_layout["ar"]
         num_gpus = str(len(gpus))
         log = _LOG_DIR / f"diffusion_server.log"
@@ -128,13 +123,12 @@ class ARCluster(DisaggCluster):
             "--warmup-mode",
             "off",
         ]
-        proc = self._start_proc(cmd, log)
+        self._start_proc(cmd, log)
         try:
             wait_for_server_health(
                 f"http://{HOST}:{self.api_port}",
                 path="/v1/models",
                 timeout=self.startup_timeout,
-                process=proc,
             )
         except Exception as e:
             raise RuntimeError(

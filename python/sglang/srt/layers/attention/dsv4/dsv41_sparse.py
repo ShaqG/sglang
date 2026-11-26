@@ -11,7 +11,6 @@ from typing import Optional, Tuple
 import torch
 from torch import nn
 
-from sglang.kernels.ops.attention.dsv4.index_score_reduce import reduce_head_scores
 from sglang.kernels.ops.gemm.bf16_fp32 import linear_bf16_fp32
 from sglang.kernels.ops.gemm.router_gemv_hip import rocm_gemv_split_k_max_tokens
 from sglang.kernels.ops.gemm.tiny_gemm import tiny_gemm_bf16
@@ -299,4 +298,5 @@ class DeepseekV41Indexer(nn.Module):
     ) -> torch.Tensor:
         """q [t, H, d], k [n, d], weights [t, H] -> [t, n], summed over all heads."""
         s = torch.einsum("bhd,nd->bhn", q, k)
-        return reduce_head_scores(s, weights)
+        s = (s.relu() * weights.unsqueeze(-1)).sum(dim=1)
+        return s.float()

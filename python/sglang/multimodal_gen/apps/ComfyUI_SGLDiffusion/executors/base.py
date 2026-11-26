@@ -7,8 +7,6 @@ import uuid
 
 import torch
 
-from ..convert import CONVERT_COMMAND
-
 try:
     from sglang.multimodal_gen.configs.sample.sampling_params import SamplingParams
     from sglang.multimodal_gen.runtime.entrypoints.utils import prepare_request
@@ -132,11 +130,9 @@ def _reject_model_patches(transformer_options) -> None:
     if found:
         raise ValueError(
             "SGLD integrated mode runs the diffusion model in its worker and cannot "
-            f"apply ComfyUI model patches ({', '.join(sorted(found))}). Remove "
-            "speed-only patch nodes (attention backends, caches, compile) and set "
-            "the equivalent in SGLDOptions (the workflow converter lists them: "
-            f"{CONVERT_COMMAND}); for ControlNet or block patches, use the native "
-            "ComfyUI loader"
+            f"apply ComfyUI model patches ({', '.join(sorted(found))}); remove the "
+            "patch nodes (ControlNet, attention backend, block patches) or use the "
+            "native ComfyUI loader"
         )
 
 
@@ -187,6 +183,7 @@ class SGLDiffusionExecutor(torch.nn.Module):
         object.__setattr__(self, "model", model)
         self.dtype = config.unet_config["dtype"]
         self.config = config
+        self.loras = []
         self._lora_input = None
         self._sgld_reload = None
         self._ensure_runtime = None
@@ -202,7 +199,7 @@ class SGLDiffusionExecutor(torch.nn.Module):
         raise RuntimeError(
             "The SGLD worker owns this diffusion model's weights, so ComfyUI weight "
             "nodes (LoraLoader, ModelSave, model merging) cannot use it; load LoRAs "
-            f"with SGLDLoraLoader, or convert the workflow: {CONVERT_COMMAND}"
+            "with SGLDLoraLoader"
         )
 
     @staticmethod
@@ -212,14 +209,7 @@ class SGLDiffusionExecutor(torch.nn.Module):
             return bool((timestep < 1.0).item())
         return bool(timestep < 1.0)
 
-    def set_lora(
-        self,
-        lora_nickname=None,
-        lora_path=None,
-        strength=None,
-        target=None,
-        merge_mode=None,
-    ):
+    def set_lora(self, lora_nickname=None, lora_path=None, strength=None, target=None):
         """Set LoRA adapter using SGLang Diffusion API."""
         desired = {
             "lora_nickname": lora_nickname,
@@ -227,10 +217,13 @@ class SGLDiffusionExecutor(torch.nn.Module):
             "strength": strength,
             "target": target,
         }
-        if merge_mode is not None:
-            desired["merge_mode"] = merge_mode
         if lora_nickname and len(lora_nickname) > 0:
-            self.generator.set_lora(**desired)
+            self.generator.set_lora(
+                lora_nickname=lora_nickname,
+                lora_path=lora_path,
+                strength=strength,
+                target=target,
+            )
 
         self._lora_input = desired
 
@@ -244,12 +237,10 @@ class SGLDiffusionExecutor(torch.nn.Module):
         """Run cache is evicted on the next bind of a newer id for this executor."""
 
     def sampler_sample_wrapper(self, executor, *args, **kwargs):
+        if self._ensure_runtime is not None:
+            self._ensure_runtime(self)
         model_wrap = args[0] if args else kwargs["model_wrap"]
         desired = model_wrap.model_patcher.model_options.get("sgld_lora_input")
-        if self._ensure_runtime is not None:
-            # A rebuilt worker gets this run's LoRAs, not the ones this cached
-            # executor served last (ComfyUI reuses a MODEL across prompts).
-            self._ensure_runtime(self, lora_input=desired)
         if desired != self._lora_input:
             if self._lora_input is not None:
                 self.generator.unmerge_lora_weights()

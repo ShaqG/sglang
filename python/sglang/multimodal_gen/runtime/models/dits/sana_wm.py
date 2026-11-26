@@ -306,7 +306,9 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
         self.out_channels = arch.out_channels
         self.num_channels_latents = arch.num_channels_latents
         self.vae_temporal_stride = arch.vae_temporal_stride
-        self.timestep_norm_scale_factor = arch.timestep_norm_scale_factor
+        self.timestep_norm_scale_factor = getattr(
+            arch, "timestep_norm_scale_factor", 1.0
+        )
 
         # --- Embedders ---
         self.x_embedder = PatchEmbedMS3D(
@@ -327,11 +329,11 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
             hidden_size=self.inner_dim,
             token_num=arch.model_max_length,
         )
-        self.y_norm = bool(arch.y_norm)
+        self.y_norm = bool(getattr(arch, "y_norm", True))
         self.attention_y_norm = _RMSNorm(
             self.inner_dim,
-            scale_factor=arch.y_norm_scale_factor,
-            eps=arch.y_norm_eps,
+            scale_factor=getattr(arch, "y_norm_scale_factor", 1.0),
+            eps=getattr(arch, "y_norm_eps", 1e-5),
         )
 
         # 3-channel raymap embedder -- kept for state_dict compatibility but
@@ -358,8 +360,8 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
             self.plucker_embedder = None
         self.use_chunk_plucker_post_attn = arch.use_chunk_plucker_post_attn
         self.use_chunk_plucker_input = arch.use_chunk_plucker_input
-        self.chunk_size = arch.chunk_size
-        self.chunk_split_strategy = arch.chunk_split_strategy
+        self.chunk_size = getattr(arch, "chunk_size", None)
+        self.chunk_split_strategy = getattr(arch, "chunk_split_strategy", "uniform")
 
         # --- RoPE ---
         self.rope = WanRotaryPosEmbed(
@@ -399,11 +401,13 @@ class SanaWMTransformer3DModel(CachableDiT, LayerwiseOffloadableModuleMixin):
                     ),
                     chunk_size=self.chunk_size,
                     chunk_split_strategy=self.chunk_split_strategy,
-                    update_rule=arch.update_rule,
-                    cam_update_rule=arch.cam_update_rule,
-                    chunk_gdn_chunk_size=arch.chunk_gdn_chunk_size,
-                    use_chunked_softmax_attention=arch.use_chunked_softmax_attention,
-                    gdn_backend=arch.gdn_backend,
+                    update_rule=getattr(arch, "update_rule", "torch_chunk"),
+                    cam_update_rule=getattr(arch, "cam_update_rule", "torch_chunk"),
+                    chunk_gdn_chunk_size=getattr(arch, "chunk_gdn_chunk_size", 21),
+                    use_chunked_softmax_attention=getattr(
+                        arch, "use_chunked_softmax_attention", False
+                    ),
+                    gdn_backend=getattr(arch, "gdn_backend", "auto"),
                 )
                 for i in range(depth)
             ]

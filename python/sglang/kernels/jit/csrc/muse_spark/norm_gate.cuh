@@ -13,7 +13,6 @@
 #include <sgl_kernel/tensor.h>
 #include <sgl_kernel/utils.h>
 
-#include <sgl_kernel/activation.cuh>
 #include <sgl_kernel/math.cuh>
 #include <sgl_kernel/runtime.cuh>
 #include <sgl_kernel/type.cuh>
@@ -29,6 +28,14 @@
 #include <cstdint>
 
 namespace sglang {
+
+/// \brief sigmoid on an approximate reciprocal (MUFU.RCP). `1.0f / y` lowers
+/// to div.rn.f32, whose out-of-line slow path costs a CALL per element; the
+/// correctly-rounded `__frcp_rn` measured slower still. Error stays within the
+/// 1 bf16 ulp the exp approximation already carries.
+SGL_DEVICE float sigmoid_gate(float x) {
+  return __fdividef(1.0f, 1.0f + __expf(-x));
+}
 
 struct NormGateParams {
   const void* __restrict__ x;
@@ -110,7 +117,7 @@ __global__ __launch_bounds__(
 
   for (uint32_t token = blockIdx.y; kExact ? token == blockIdx.y : token < params.num_tokens; token += gridDim.y) {
     Storage xv;
-    xv.load(assume_global(x_row + token * row_pitch), lane);
+    xv.load(x_row + token * row_pitch, lane);
 
     float sum_of_squares = 0.0f;
     if constexpr (kHasNorm) {
@@ -122,7 +129,7 @@ __global__ __launch_bounds__(
       }
     }
     if constexpr (kHasGate) {
-      gv.load(assume_global(gate_row + token * params.gate_stride_token), lane);
+      gv.load(gate_row + token * params.gate_stride_token, lane);
     }
     // ---- PDL: Trigger next kernel here to increase overlap
     PDLTriggerSecondary<kUsePDL>();
@@ -132,7 +139,7 @@ __global__ __launch_bounds__(
       rstd = math::rsqrt(sum_of_squares / static_cast<float>(kHeadDim) + params.eps);
 
       if constexpr (kHasWeight) {
-        wv.load(assume_global(params.weight), lane);
+        wv.load(params.weight, lane);
       }
     }
 #pragma unroll
@@ -149,8 +156,8 @@ __global__ __launch_bounds__(
       }
       if constexpr (kHasGate) {
         const auto g = cast<fp32x2_t>(gv[p]);
-        acc.x *= activation::sigmoid(g.x);
-        acc.y *= activation::sigmoid(g.y);
+        acc.x *= sigmoid_gate(g.x);
+        acc.y *= sigmoid_gate(g.y);
       }
       yv[p] = cast<Packed>(acc);
     }

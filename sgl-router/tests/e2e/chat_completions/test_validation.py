@@ -1,4 +1,6 @@
-"""Basic chat-completions correctness through sgl-router.
+"""Basic chat-completions correctness — ported from SMG's
+``e2e_test/chat_completions/test_validation.py``, narrowed to the
+subset that exercises sgl-router (not SMG's per-message validators).
 
 The shape:
   - single-worker regular-mode router
@@ -13,9 +15,9 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from infra.gateway import Gateway
 from infra.model_pool import spawn_worker
 from infra.model_specs import get_model_spec
-from infra.router import Router
 
 
 @pytest.mark.real_gpu
@@ -27,15 +29,15 @@ def test_chat_non_streaming_returns_assistant_message(
     try:
         with spawn_worker("qwen3-0.6b", gpu_ids=gpu) as worker:
             spec = get_model_spec("qwen3-0.6b")
-            with Router() as router:
-                router.start_regular(
+            with Gateway() as gw:
+                gw.start_regular(
                     model_id=spec["model"],
                     tokenizer_path=spec["model"],
                     worker_urls=[worker.url],
                     timeout=120.0,
                 )
                 resp = httpx.post(
-                    f"{router.base_url}/v1/chat/completions",
+                    f"{gw.base_url}/v1/chat/completions",
                     json={
                         "model": spec["model"],
                         "messages": [{"role": "user", "content": "Say hi."}],
@@ -65,8 +67,8 @@ def test_chat_streaming_emits_sse_chunks_with_done(
     try:
         with spawn_worker("qwen3-0.6b", gpu_ids=gpu) as worker:
             spec = get_model_spec("qwen3-0.6b")
-            with Router() as router:
-                router.start_regular(
+            with Gateway() as gw:
+                gw.start_regular(
                     model_id=spec["model"],
                     tokenizer_path=spec["model"],
                     worker_urls=[worker.url],
@@ -75,7 +77,7 @@ def test_chat_streaming_emits_sse_chunks_with_done(
                 chunks: list[str] = []
                 with httpx.stream(
                     "POST",
-                    f"{router.base_url}/v1/chat/completions",
+                    f"{gw.base_url}/v1/chat/completions",
                     json={
                         "model": spec["model"],
                         "messages": [{"role": "user", "content": "Say hi."}],

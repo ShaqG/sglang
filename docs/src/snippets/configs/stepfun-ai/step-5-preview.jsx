@@ -136,12 +136,13 @@ export const config = {
       router: {
         port: 8000,
         command:
-`sgl-router \\
-  --model-id {{MODEL_NAME}} \\
-  --no-tokenizer \\
-  --worker-urls http://<prefill-host>:{{PREFILL_PORT}} http://<decode-host>:{{DECODE_PORT}} \\
+`python3 -m sglang_router.launch_router \\
+  --pd-disaggregation \\
+  --prefill http://<prefill-host>:{{PREFILL_PORT}} \\
+  --decode http://<decode-host>:{{DECODE_PORT}} \\
   --host 0.0.0.0 --port {{ROUTER_PORT}} \\
-  --disable-circuit-breaker`,
+  --disable-circuit-breaker \\
+  --health-check-interval-secs 999999`,
       },
     },
 

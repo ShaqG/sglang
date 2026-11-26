@@ -40,8 +40,7 @@ class TestAscendW8A8(CustomTestCase):
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[
                 "--trust-remote-code",
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
                 "--device",
                 "npu",
                 "--attention-backend",

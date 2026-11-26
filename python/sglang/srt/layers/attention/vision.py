@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import math
+import warnings
 from functools import lru_cache, partial
 from typing import Any, Callable, List, Optional, Tuple
 
@@ -100,6 +101,10 @@ from sglang.srt.layers.rotary_embedding.utils import apply_rotary_pos_emb_native
 from sglang.srt.layers.utils.common import add_prefix
 
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
+
+ROTARY_EMBED_CLASSES = {
+    "normal": apply_rotary_pos_emb,
+}
 
 # === Vision Encoder === #
 FLASHINFER_WORKSPACE_SIZE_BYTES = 128 * 1024 * 1024
@@ -1177,6 +1182,13 @@ class VisionAttention(nn.Module):
         **kwargs,
     ):
         super().__init__()
+        if head_dim is None and "head_size" in kwargs:
+            head_dim = kwargs.pop("head_size")
+            warnings.warn(
+                "VisionAttention(head_size=...) is deprecated; use head_dim=...",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.tp_size = 1 if use_data_parallel else get_parallel().attn_tp_size
         self.tp_rank = 0 if use_data_parallel else get_parallel().attn_tp_rank
         self.dropout = dropout
@@ -1570,8 +1582,8 @@ class VisionAttention(nn.Module):
 
         # internvl
         if self.qk_normalization and not self.qk_normalization_by_head_size:
-            # The norm spans every head, so under TP it needs _apply_qk_norm's all-gather.
-            if self.tp_size == 1 and can_use_jit_qk_norm(self.head_size, q.dtype):
+            # jit kernel
+            if can_use_jit_qk_norm(self.head_size, q.dtype):
                 # q: [tokens, head, head_size]  ->  [tokens, embed_dim]
                 head_dim_for_norm = head * self.head_size
 

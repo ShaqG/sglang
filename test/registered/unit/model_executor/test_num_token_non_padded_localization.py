@@ -554,6 +554,7 @@ class TestDecoderReplayTailMoeBound(CustomTestCase):
                         forward_batch=batch,
                         num_tokens=4,
                         tail_in_graph=False,
+                        late_dp_counts=None,
                     )
                 self.assertEqual(use_graph, expected)
                 self.assertIsNone(dp_rows)

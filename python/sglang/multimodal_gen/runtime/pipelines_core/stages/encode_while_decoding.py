@@ -41,9 +41,6 @@ def can_encode_while_decoding(
         and not server_args.enable_torch_compile
         and type(server_args.pipeline_config).post_decoding
         is PipelineConfig.post_decoding
-        # S2V trims its reference/motion frames there and muxes audio after.
-        and type(server_args.pipeline_config).postprocess_decoded_batch
-        is PipelineConfig.postprocess_decoded_batch
     )
 
 
@@ -59,10 +56,7 @@ def streamed_video_output_path(
 
 
 class EncodeWhileDecoding:
-    """Feed each run of finished frames to the MP4 encoder while the VAE decodes the rest.
-
-    ``audio`` may be a zero-argument callable (``CudaVideoEncoder.open``).
-    """
+    """Feed each run of finished frames to the MP4 encoder while the VAE decodes the rest."""
 
     def __init__(
         self,

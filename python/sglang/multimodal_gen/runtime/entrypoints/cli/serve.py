@@ -34,7 +34,7 @@ def add_multimodal_gen_serve_args(parser: argparse.ArgumentParser):
 
 def execute_serve_cmd(args: argparse.Namespace, unknown_args: list[str] | None = None):
     """The entry point for the serve command."""
-    # serving default: server-based warmup
+    # serving defaults: server-based warmup, throughput-oriented encoders
     server_args = ServerArgs.from_cli_args(
         args,
         unknown_args,
@@ -76,3 +76,7 @@ class ServeSubcommand(CLISubcommand):
         serve_parser = add_multimodal_gen_serve_args(serve_parser)
 
         return cast(FlexibleArgumentParser, serve_parser)
+
+
+def cmd_init() -> list[CLISubcommand]:
+    return [ServeSubcommand()]

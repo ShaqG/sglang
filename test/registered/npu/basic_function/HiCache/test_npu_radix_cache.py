@@ -12,7 +12,7 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_npu_ci(est_time=400, suite="full-test-1-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="full-1-npu-a3", nightly=True)
 
 
 class TestNPURadixCache(CustomTestCase):
@@ -32,8 +32,7 @@ class TestNPURadixCache(CustomTestCase):
         other_args = [
             "--attention-backend",
             "ascend",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--mem-fraction-static",
             0.8,
             "--tp-size",

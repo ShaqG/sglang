@@ -125,6 +125,8 @@ def get_non_pad_index(
 
 
 class VideoSparseAttentionBackend(AttentionBackend):
+    accept_output_buffer: bool = True
+
     @staticmethod
     def get_supported_head_sizes() -> list[int]:
         return [64, 128]
@@ -136,6 +138,10 @@ class VideoSparseAttentionBackend(AttentionBackend):
     @staticmethod
     def get_impl_cls() -> type["VideoSparseAttentionImpl"]:
         return VideoSparseAttentionImpl
+
+    @staticmethod
+    def get_metadata_cls() -> type["VideoSparseAttentionMetadata"]:
+        return VideoSparseAttentionMetadata
 
     @staticmethod
     def get_builder_cls() -> type["VideoSparseAttentionMetadataBuilder"]:

@@ -8,12 +8,10 @@ import requests
 
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.test_utils import (
-    ADMIN_LAUNCH_ARGS_FOR_TEST,
     DEFAULT_MODEL_NAME_FOR_TEST_MLA,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
-    admin_post,
     popen_launch_server,
     terminate_and_kill_process_tree,
 )
@@ -84,7 +82,6 @@ class TestWeightVersionSpans(CustomTestCase):
                 "--max-running-requests",
                 "8",
                 "--enable-prefill-weight-versions",
-                *ADMIN_LAUNCH_ARGS_FOR_TEST,
             ],
         )
 
@@ -123,31 +120,29 @@ class TestWeightVersionSpans(CustomTestCase):
         return response.json()["weight_version"]
 
     def _pause(self, mode: str):
-        admin_post(
+        requests.post(
             f"{self.base_url}/pause_generation",
             json={"mode": mode},
             timeout=30,
         ).raise_for_status()
 
     def _continue(self):
-        admin_post(
+        requests.post(
             f"{self.base_url}/continue_generation",
             json={},
             timeout=30,
         ).raise_for_status()
 
     def _abort_all(self):
-        admin_post(
-            f"{self.base_url}/abort_request",
-            json={"abort_all": True},
-            timeout=30,
+        requests.post(
+            f"{self.base_url}/abort_request", json={"abort_all": True}, timeout=30
         ).raise_for_status()
 
     def _flush_cache(self):
-        admin_post(f"{self.base_url}/flush_cache", timeout=30).raise_for_status()
+        requests.post(f"{self.base_url}/flush_cache", timeout=30).raise_for_status()
 
     def _set_weight_version(self, new_version: str, abort_all_requests: bool = False):
-        response = admin_post(
+        response = requests.post(
             f"{self.base_url}/update_weight_version",
             json={
                 "new_version": new_version,
@@ -159,7 +154,7 @@ class TestWeightVersionSpans(CustomTestCase):
         return response.json()
 
     def _update_weights_from_disk(self, **fields) -> None:
-        response = admin_post(
+        response = requests.post(
             f"{self.base_url}/update_weights_from_disk",
             json={"model_path": self.model, "flush_cache": False, **fields},
             timeout=_REQUEST_TIMEOUT,

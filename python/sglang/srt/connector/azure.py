@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Generator, Optional, Tuple
@@ -7,7 +8,22 @@ from typing import Generator, Optional, Tuple
 import torch
 
 from sglang.srt.connector import BaseFileConnector
-from sglang.srt.connector.utils import filter_allow, filter_ignore
+
+
+def _filter_allow(paths: list[str], patterns: list[str]) -> list[str]:
+    return [
+        path
+        for path in paths
+        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    ]
+
+
+def _filter_ignore(paths: list[str], patterns: list[str]) -> list[str]:
+    return [
+        path
+        for path in paths
+        if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    ]
 
 
 def _normalize_url(url: str) -> str:
@@ -38,11 +54,11 @@ def list_files(
     base_dir = _normalize_url(path)
     files = [p for p in bf.glob(base_dir + "/**") if not bf.isdir(p)]
 
-    files = filter_ignore(files, ["*/"])
+    files = _filter_ignore(files, ["*/"])
     if allow_pattern is not None:
-        files = filter_allow(files, allow_pattern)
+        files = _filter_allow(files, allow_pattern)
     if ignore_pattern is not None:
-        files = filter_ignore(files, ignore_pattern)
+        files = _filter_ignore(files, ignore_pattern)
 
     return base_dir, files
 

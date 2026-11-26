@@ -46,10 +46,7 @@ def _children(value):
 
 
 def _gpu_leaves(value, batches):
-    # Test the device type, not tensor.is_cuda: compat layers such as
-    # torch_npu's transfer_to_npu alias is_cuda to their own accelerator,
-    # which would collect non-CUDA tensors for the CUDA-only BLAKE3 kernel.
-    if isinstance(value, torch.Tensor) and value.device.type == "cuda":
+    if isinstance(value, torch.Tensor) and value.is_cuda:
         batches[value.device][id(value)] = value
     else:
         for child in _children(value):
@@ -95,8 +92,7 @@ def _encode(value, gpu_digests) -> bytes:
     if isinstance(value, torch.Tensor):
         if value.layout != torch.strided or value.is_quantized:
             raise TypeError("Multimodal identities require dense, unquantized tensors")
-        # Same device test as _gpu_leaves; non-CUDA tensors take the CPU path.
-        if value.device.type == "cuda":
+        if value.is_cuda:
             digest = gpu_digests[id(value)]
         else:
             raw = (

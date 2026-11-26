@@ -149,7 +149,6 @@ class FusedQKNorm(BaseFusedOp):
         KernelBackend.HELION: {CapabilityRequirement.CUDA},
         KernelBackend.TRITON: {
             CapabilityRequirement.CUDA,
-            CapabilityRequirement.HIP,
         },
     }
 

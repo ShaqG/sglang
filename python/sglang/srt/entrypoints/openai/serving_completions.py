@@ -66,7 +66,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
         if not prompt or (isinstance(prompt, list) and all(not p for p in prompt)):
             return "Prompt cannot be empty"
 
-        return self._top_logprobs_error("logprobs", request.logprobs)
+        return None
 
     def _convert_to_internal_request(
         self,

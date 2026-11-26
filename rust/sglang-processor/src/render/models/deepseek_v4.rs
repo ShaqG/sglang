@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use deepseek_recipe::openai::ChatCompletionRequest;
 use deepseek_recipe::request::{ConversationRequest, ConversionOptions, ProtocolRequest};
-use deepseek_recipe_core::multimodal::ImageSource;
 use deepseek_recipe_core::special_tokens::SpecialTokensMap;
 use deepseek_recipe_encoding::PromptEncoding;
 use deepseek_recipe_encoding::v4::dsv4::DeepseekV4Encoding;
@@ -18,7 +17,7 @@ use tokenizers::{AddedVocabulary, Tokenizer};
 
 use super::pydantic_dump::{continues_final_message, function_dump, pydantic_bool};
 use crate::py::python_json_compact;
-use crate::render::reasoning::{EFFORT_TIERS, requested_effort, requested_thinking};
+use crate::render::reasoning::{requested_effort, requested_thinking};
 
 /// The checkpoint tokenizer's image token; recipe's bundled tokenizer spells it `<｜image｜>`.
 const IMAGE_TOKEN: &str = "<｜deepseek_image｜>";
@@ -93,13 +92,12 @@ impl std::fmt::Debug for DeepSeekTokenizer {
     }
 }
 
-/// Render an SGLang chat request body for DeepSeek-V4 (`v41` false) or V4.1,
-/// with its image sources in placeholder order.
+/// Render an SGLang chat request body for DeepSeek-V4 (`v41` false) or V4.1.
 pub(crate) fn render(
     v41: bool,
     request: Value,
     defaults: &HashMap<String, Value>,
-) -> Result<(RenderedPrompt, Vec<String>), String> {
+) -> Result<RenderedPrompt, String> {
     let thinking = thinking(&request, defaults);
     let (effort, budget) = effort(v41, &request, defaults)?;
     let task = task(&request)?;
@@ -160,14 +158,10 @@ pub(crate) fn render(
             .with_special_tokens(special_tokens())
             .render_conversation(&converted.conversation)
     };
-    // `deepseek_recipe_renderer.py`: `source.url or source.data_url`.
-    let images = (rendered.image_sources.into_iter())
-        .map(|source| match source {
-            ImageSource::Url { url, .. } => Ok(url),
-            ImageSource::DataUrl { data_url, .. } => Ok(data_url),
-            ImageSource::Bytes { .. } => Err("image bytes are not a chat image source"),
-        })
-        .collect::<Result<_, _>>()?;
+    // The processor serves text only; SGLang rejects images on a text-only server.
+    if !rendered.image_sources.is_empty() {
+        return Err("image input is not supported for this model".into());
+    }
     let mut segments = segments(&rendered.prompt, &rendered.special_ranges);
     if let Some(budget) = budget.filter(|_| thinking) {
         replace_effort_budget(&mut segments, budget)?;
@@ -179,7 +173,7 @@ pub(crate) fn render(
         // `encode_text`: the checkpoint tokenizer with its special tokens.
         segments.push(RenderedSegment::new(prefix, true));
     }
-    Ok((RenderedPrompt::segmented(segments), images))
+    Ok(RenderedPrompt::segmented(segments))
 }
 
 /// `DeepSeekRecipe.parse_start`: where output parsing begins after the prompt
@@ -340,12 +334,16 @@ fn request_effort_value(effort: &Value) -> Value {
         Value::String(text) => text
             .parse::<f64>()
             .ok()
-            .filter(|_| !EFFORT_TIERS.contains(&text.as_str()))
+            .filter(|_| !TIERS.contains(&text.as_str()))
             .map_or_else(|| effort.clone(), |value| json!(value)),
         Value::Number(number) => number.as_f64().map_or_else(|| effort.clone(), |v| json!(v)),
         _ => effort.clone(),
     }
 }
+
+const TIERS: [&str; 8] = [
+    "none", "minimal", "low", "medium", "high", "xhigh", "ultra", "max",
+];
 
 /// `SGLANG_DSV4_REASONING_EFFORT` / `SGLANG_DSV41_REASONING_EFFORT`.
 fn env_effort(v41: bool) -> Option<Value> {

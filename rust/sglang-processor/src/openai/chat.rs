@@ -358,6 +358,7 @@ struct ChatRequest {
     extra_key: Option<OneOrList<String>>,
     cache_salt: Option<OneOrList<String>>,
     priority: Option<i64>,
+    data_parallel_rank: Option<i64>,
     bootstrap_host: Option<OneOrList<String>>,
     bootstrap_port: Option<OneOrList<Option<i64>>>,
     bootstrap_room: Option<OneOrList<i64>>,
@@ -379,7 +380,6 @@ const UNSUPPORTED_FIELDS: &[&str] = &[
     "return_output_ids_in_sglext",
     "return_sampling_mask",
     "return_flat_raw_output_top_logprobs",
-    "return_flat_raw_sampling_mask",
     "sampling_logprobs_mode",
     "video_config",
     "max_dynamic_patch",
@@ -844,9 +844,11 @@ fn valid_message(message: &Value) -> bool {
         return false;
     };
     let role = message.get("role").and_then(Value::as_str);
+    // Thinking parts are valid only in assistant messages.
+    let assistant = role.is_some_and(|r| r.eq_ignore_ascii_case("assistant"));
     let text_content = |content: &Value| match content {
         Value::String(_) => true,
-        Value::Array(parts) => parts.iter().all(text_part),
+        Value::Array(parts) => parts.iter().all(|part| text_part(part, assistant)),
         _ => false,
     };
     match role {
@@ -874,11 +876,17 @@ fn valid_message(message: &Value) -> bool {
     }
 }
 
-/// A text or `tool_reference` content part.
-fn text_part(part: &Value) -> bool {
+/// A text, `tool_reference` or (in assistant messages) thinking content part.
+fn text_part(part: &Value, assistant: bool) -> bool {
     match part["type"].as_str() {
         Some("text") => part["text"].is_string(),
         Some("tool_reference") => part["name"].is_string(),
+        // `ChatCompletionMessageContentThinkingPart`: exactly one of `thinking` and `text`.
+        Some("thinking" | "reasoning") if assistant => {
+            let set = |key: &str| !part[key].is_null();
+            let string = |key: &str| part[key].is_null() || part[key].is_string();
+            set("thinking") != set("text") && string("thinking") && string("text")
+        }
         _ => false,
     }
 }
@@ -1004,7 +1012,7 @@ fn generate_body(
         bootstrap_host: request.bootstrap_host.clone().map(Into::into),
         bootstrap_port: request.bootstrap_port.clone().map(Into::into),
         bootstrap_room: request.bootstrap_room.clone().map(Into::into),
-        routed_dp_rank: request.routed_dp_rank,
+        routed_dp_rank: request.routed_dp_rank.or(request.data_parallel_rank),
         disagg_prefill_dp_rank: request.disagg_prefill_dp_rank,
         rid: request.rid.clone().map(Into::into),
         session_id: request.session_id.clone(),
@@ -1586,7 +1594,9 @@ mod tests {
             json!([{"role": "USER", "content": "hi"}]),
             json!([{"role": "bot", "content": "hi"}]),
             json!([{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]),
-            json!([{"role": "assistant", "content": [{"type": "thinking", "thinking": "t"}]}]),
+            json!([{"role": "user", "content": [{"type": "thinking", "thinking": "t"}]}]),
+            json!([{"role": "assistant", "content": [{"type": "thinking", "thinking": "t", "text": "x"}]}]),
+            json!([{"role": "assistant", "content": [{"type": "thinking"}]}]),
             json!([{"role": "user", "content": [{"type": "tool_reference"}]}]),
             json!([{"role": "user", "content": [{"type": "text"}]}]),
             json!([{"role": "user", "content": 1}]),
@@ -1611,7 +1621,7 @@ mod tests {
         let messages = json!([
             {"role": "System", "content": "be brief", "tools": []},
             {"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "tool_reference", "name": "f"}], "name": 1},
-            {"role": "Assistant", "content": [{"type": "text", "text": "a"}]},
+            {"role": "Assistant", "content": [{"type": "thinking", "thinking": "t"}, {"type": "text", "text": "a"}]},
             {"role": "assistant", "content": null, "phase": null, "tool_calls": [
                 {"id": "c", "index": 0, "type": "function", "function": {"name": "f", "arguments": {}}}
             ]},

@@ -124,7 +124,9 @@ class UsageProcessor:
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=details,
             reasoning_tokens=reasoning_tokens,
-            completion_tokens_details=CompletionTokensDetails(
-                reasoning_tokens=reasoning_tokens or 0
+            completion_tokens_details=(
+                CompletionTokensDetails(reasoning_tokens=reasoning_tokens)
+                if reasoning_tokens
+                else None
             ),
         )

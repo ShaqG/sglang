@@ -52,7 +52,6 @@ from sglang.srt.utils.weight_versions import (
     record_weight_version_events,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
-from sglang.test.scheduler_test_utils import FakeReq
 from sglang.test.test_utils import enter_scope, published_topology
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
@@ -69,7 +68,7 @@ _REQUEST_STATS = RequestOutputStats(
 )
 
 
-class _FakeReq(FakeReq):
+class _FakeReq:
     def __init__(
         self,
         rid,
@@ -594,9 +593,7 @@ class TestOutputStreamerDecodeLatency(unittest.TestCase):
             send_to_detokenizer=None,
             tree_cache=None,
             server_args=SimpleNamespace(
-                enable_hierarchical_cache=False,
-                enable_lmcache=False,
-                enable_unified_cache_external_linker=False,
+                enable_hierarchical_cache=False, enable_lmcache=False
             ),
             is_generation=True,
             spec_algorithm=SpeculativeAlgorithm.NONE,
@@ -786,7 +783,6 @@ class TestOutputStreamerCachedTokensSplit(unittest.TestCase):
         self,
         *,
         hierarchical_cache,
-        external_linker=False,
         storage_backend=None,
         disaggregation_mode=DisaggregationMode.NULL,
     ):
@@ -799,9 +795,7 @@ class TestOutputStreamerCachedTokensSplit(unittest.TestCase):
                 cache_controller=SimpleNamespace(storage_backend=storage_backend)
             ),
             server_args=SimpleNamespace(
-                enable_hierarchical_cache=hierarchical_cache,
-                enable_lmcache=False,
-                enable_unified_cache_external_linker=external_linker,
+                enable_hierarchical_cache=hierarchical_cache, enable_lmcache=False
             ),
             is_generation=True,
             spec_algorithm=SpeculativeAlgorithm.NONE,
@@ -820,7 +814,7 @@ class TestOutputStreamerCachedTokensSplit(unittest.TestCase):
         return rust_server.push_generation.call_args.args[2:4]
 
     def test_rust_frames_split_cached_tokens_by_tier(self):
-        """A cache with a host or storage tier, an external linker, or PD decode sends
+        """A cache with a host or storage tier, or a PD decode server, sends
         each request's cached tokens by tier and the attached storage
         backend's type; a device-only cache sends neither."""
 
@@ -837,10 +831,6 @@ class TestOutputStreamerCachedTokensSplit(unittest.TestCase):
                 hierarchical_cache=False,
                 disaggregation_mode=DisaggregationMode.DECODE,
             ),
-            ([(1, 2, 3)], None),
-        )
-        self.assertEqual(
-            self._split_sent(hierarchical_cache=False, external_linker=True),
             ([(1, 2, 3)], None),
         )
         self.assertEqual(self._split_sent(hierarchical_cache=False), (None, None))
@@ -874,9 +864,7 @@ class TestOutputStreamerRustRequestStats(unittest.TestCase):
             send_to_detokenizer=None,
             tree_cache=None,
             server_args=SimpleNamespace(
-                enable_hierarchical_cache=False,
-                enable_lmcache=False,
-                enable_unified_cache_external_linker=False,
+                enable_hierarchical_cache=False, enable_lmcache=False
             ),
             is_generation=True,
             spec_algorithm=(

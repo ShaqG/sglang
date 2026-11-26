@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Generator, Optional, Tuple
@@ -7,7 +8,22 @@ from typing import Generator, Optional, Tuple
 import torch
 
 from sglang.srt.connector import BaseFileConnector
-from sglang.srt.connector.utils import filter_allow, filter_ignore
+
+
+def _filter_allow(paths: list[str], patterns: list[str]) -> list[str]:
+    return [
+        path
+        for path in paths
+        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    ]
+
+
+def _filter_ignore(paths: list[str], patterns: list[str]) -> list[str]:
+    return [
+        path
+        for path in paths
+        if not any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+    ]
 
 
 def list_files(
@@ -40,12 +56,12 @@ def list_files(
     objects = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
     paths = [obj["Key"] for obj in objects.get("Contents", [])]
 
-    paths = filter_ignore(paths, ["*/"])
+    paths = _filter_ignore(paths, ["*/"])
     if allow_pattern is not None:
-        paths = filter_allow(paths, allow_pattern)
+        paths = _filter_allow(paths, allow_pattern)
 
     if ignore_pattern is not None:
-        paths = filter_ignore(paths, ignore_pattern)
+        paths = _filter_ignore(paths, ignore_pattern)
 
     return bucket_name, prefix, paths
 

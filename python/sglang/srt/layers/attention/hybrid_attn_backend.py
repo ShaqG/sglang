@@ -55,9 +55,6 @@ class HybridAttnBackend(AttentionBackend):
             prefill_backend, "extend_dummy_seqs_capped_by_req_pool", False
         )
 
-    def window_capacity_children(self) -> list:
-        return [self.prefill_backend, self.decode_backend]
-
     @property
     def supports_ragged_verify_graph(self) -> bool:
         # Ragged verify is TARGET_VERIFY-only; delegate to its executor.
@@ -235,12 +232,11 @@ class HybridAttnBackend(AttentionBackend):
         return backend.get_indexer_metadata(layer_id, forward_batch)
 
     def update_mamba_state_after_mtp_verify(self, *args, **kwargs):
-        return self.target_verify_backend().update_mamba_state_after_mtp_verify(
-            *args, **kwargs
-        )
-
-    def forward_state_slots(self, *args, **kwargs):
-        return self.target_verify_backend().forward_state_slots(*args, **kwargs)
+        if self.spec_attn_is_decode:
+            backend = self.decode_backend
+        else:
+            backend = self.prefill_backend
+        return backend.update_mamba_state_after_mtp_verify(*args, **kwargs)
 
     def forward(
         self,

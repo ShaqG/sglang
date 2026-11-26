@@ -9,7 +9,6 @@ from sglang.srt.managers.scheduler_components.request_list import (
     IndexedReqList,
     ListKind,
     ReqList,
-    move,
 )
 
 if TYPE_CHECKING:
@@ -18,9 +17,6 @@ if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
     from sglang.srt.managers.scheduler_components.output_streamer import (
         SchedulerOutputStreamer,
-    )
-    from sglang.srt.managers.scheduler_components.request_retirer import (
-        RequestRetirer,
     )
 
 logger = logging.getLogger(__name__)
@@ -35,12 +31,10 @@ class DeferredResponses:
         *,
         disaggregation_mode: DisaggregationMode,
         output_streamer: SchedulerOutputStreamer,
-        request_retirer: RequestRetirer,
         send_abort: Callable[[Req, Optional[FinishReasonDict]], None],
     ):
         self.disaggregation_mode = disaggregation_mode
         self.output_streamer = output_streamer
-        self.request_retirer = request_retirer
         self.send_abort = send_abort
         # (req, completion) per held response.
         self.held = IndexedReqList(
@@ -57,13 +51,7 @@ class DeferredResponses:
             raise ValueError("only finished, unstreamed responses can be deferred")
         if any(held.rid == req.rid for held in self.held):
             raise ValueError(f"response {req.rid!r} is already deferred")
-        if req.owner_list is not None:
-            # Its release would take it out of the deferred list.
-            raise ValueError(
-                f"response {req.rid!r} is still in {req.owner_list.kind.name}; "
-                "defer it after its release"
-            )
-        move([(req, completion)], self.held)
+        self.held.join([(req, completion)])
         req.defer_output = True
         self.output_streamer.defer_outputs = True
 
@@ -74,7 +62,7 @@ class DeferredResponses:
         for req, completion in list(self.held.items()):
             if not completion.done():
                 continue
-            self.request_retirer.settle_output(req)
+            self.held.leave([req])
             req.defer_output = False
             try:
                 completion.result()
@@ -103,7 +91,7 @@ class DeferredResponses:
     def _abort(self, recv_req: AbortReq) -> None:
         for req, completion in list(self.held.items()):
             if recv_req.matches(req.rid):
-                self.request_retirer.settle_output(req)
+                self.held.leave([req])
                 try:
                     completion.cancel()
                 except Exception:

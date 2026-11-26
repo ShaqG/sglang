@@ -19,7 +19,5 @@ def cp_all_gather_rerange_kv_cache(input_tensor, cp_size, forward_batch, stream)
     _deprecated_platform_cp()
 
 
-def cp_allgather_and_save_kv_cache(
-    forward_batch, layer, k, v, cp_size, window_locs=None
-):
+def cp_allgather_and_save_kv_cache(forward_batch, layer, k, v, cp_size, swa_loc=None):
     _deprecated_platform_cp()

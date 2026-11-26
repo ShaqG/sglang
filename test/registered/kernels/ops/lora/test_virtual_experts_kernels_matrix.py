@@ -501,6 +501,12 @@ class TestVirtualExpertsRoutingMatrix(CustomTestCase):
                                     kwargs, stage=stage, intermediate_buffer=buffer
                                 )
                                 if stage == "expand" and buffer is None:
+                                    with self.assertRaisesRegex(
+                                        AssertionError, "requires intermediate_buffer"
+                                    ):
+                                        temp.merged_experts_fused_moe_lora_add(
+                                            **call_kwargs
+                                        )
                                     continue
                                 result = temp.merged_experts_fused_moe_lora_add(
                                     **call_kwargs
@@ -519,6 +525,10 @@ class TestVirtualExpertsRoutingMatrix(CustomTestCase):
                             temp.merged_experts_fused_moe_lora_add(
                                 **dict(kwargs, output=reduced, fuse_sum_all_reduce=True)
                             )
+                        )
+                    with self.assertRaisesRegex(AssertionError, "invalid stage"):
+                        temp.merged_experts_fused_moe_lora_add(
+                            **dict(kwargs, stage="invalid")
                         )
                     self.assertEqual(cache, {"untouched": cache_marker})
                     torch.testing.assert_close(backing, saved, rtol=0, atol=0)

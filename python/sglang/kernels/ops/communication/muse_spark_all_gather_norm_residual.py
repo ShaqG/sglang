@@ -20,8 +20,8 @@ from sglang.kernels.ops.layernorm.muse_spark_norm_residual_jit import (
 if TYPE_CHECKING:
     from tvm_ffi.module import Module
 
-    from sglang.srt.distributed.device_communicators.symm_workspace import (
-        WorkspaceLease,
+    from sglang.srt.distributed.device_communicators.custom_all_reduce_v2 import (
+        CustomAllReduceV2,
     )
 
 _VEC = 8
@@ -58,28 +58,37 @@ def _jit_module(
 
 
 def all_gather_norm_residual_supported(
-    comm: Optional[WorkspaceLease], num_tokens: int, hidden_size: int
+    comm: Optional[CustomAllReduceV2], num_tokens: int, hidden_size: int
 ) -> bool:
+    from sglang.srt.distributed.device_communicators.custom_all_reduce_v2 import (
+        CustomAllReduceV2,
+    )
+
     if (
-        comm is None
+        not isinstance(comm, CustomAllReduceV2)
+        or comm.disabled
         or not comm.has_multicast
         or comm.world_size < 2
         or num_tokens <= 0
         or hidden_size % (comm.world_size * _VEC)
-        or num_tokens * hidden_size * 2 > comm.request.push_slot_bytes
+        or num_tokens * hidden_size * 2 > comm.max_push_size
     ):
         return False
     if not current_arch().is_sm_at_least(10):
         return False
     try:
-        norm_residual_launch_config(hidden_size=hidden_size, num_tokens=num_tokens)
+        cluster_size, _, _ = norm_residual_launch_config(
+            hidden_size=hidden_size, num_tokens=num_tokens
+        )
     except RuntimeError:
         return False
-    return True
+    return comm.config.num_push_blocks >= 2 and (
+        cluster_size == 1 or num_tokens * cluster_size <= comm.config.num_push_blocks
+    )
 
 
 def all_gather_norm_residual(
-    comm: WorkspaceLease,
+    comm: CustomAllReduceV2,
     local: torch.Tensor,
     stream: torch.Tensor,
     post_eps: float,
@@ -108,7 +117,7 @@ def all_gather_norm_residual(
         alpha is not None,
     )
     module.run(
-        comm.get_communicator(),
+        comm.obj,
         local.contiguous(),
         stream,
         output,

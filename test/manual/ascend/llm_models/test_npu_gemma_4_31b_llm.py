@@ -20,8 +20,7 @@ class TestGemma431B(GSM8KAscendMixin, CustomTestCase):
         "0.7",
         "--attention-backend",
         "ascend",
-        "--disable-decode-cuda-graph",
-        "--disable-prefill-cuda-graph",
+        "--disable-cuda-graph",
         "--tp-size",
         "2",
     ]

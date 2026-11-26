@@ -1,7 +1,6 @@
-"""Quark MXFP4 MoE W4A16 (triton_kernels) path on consumer RDNA.
+"""Quark MXFP4 MoE W4A16 (triton_kernels) path on gfx1151.
 
-The path must only replace the AITER path on consumer RDNA (gfx11 / gfx120);
-other AMD GPUs, including gfx1250, keep AITER.
+The path must only replace the AITER path on gfx1151; other AMD GPUs keep AITER.
 With EP > 1 the dispatcher maps experts owned by other ranks to -1; the W4A16
 path must drop those slots instead of indexing with -1 (a GPU memory fault).
 """
@@ -23,7 +22,7 @@ from sglang.srt.layers.quantization.quark.schemes.quark_w4a4_mxfp4_moe import (
 from sglang.srt.utils import is_hip
 from sglang.test.ci.ci_register import register_amd_ci
 
-register_amd_ci(est_time=40, stage="base-b", runner_config="1-gpu-small-amd")
+register_amd_ci(est_time=40, stage="stage-b", runner_config="1-gpu-small-amd")
 
 try:
     import triton_kernels  # noqa: F401
@@ -101,14 +100,8 @@ class TestQuarkMxfp4MoeW4A16Gate(unittest.TestCase):
     def test_gfx942_keeps_the_aiter_path(self):
         self.assertFalse(_w4a16_enabled_on("gfx942:sramecc+:xnack-"))
 
-    def test_gfx1250_keeps_the_aiter_path(self):
-        # gfx1250 (MI455) also starts with gfx12, so a gfx12 prefix would misfire.
-        self.assertFalse(_w4a16_enabled_on("gfx1250"))
-
-    def test_consumer_rdna_uses_the_w4a16_path(self):
-        for arch in ("gfx1100", "gfx1151", "gfx1200", "gfx1201:sramecc-:xnack-"):
-            with self.subTest(arch=arch):
-                self.assertTrue(_w4a16_enabled_on(arch))
+    def test_gfx1151_uses_the_w4a16_path(self):
+        self.assertTrue(_w4a16_enabled_on("gfx1151"))
 
 
 @unittest.skipUnless(

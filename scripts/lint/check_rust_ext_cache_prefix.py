@@ -15,9 +15,7 @@ import yaml
 BUILD_WORKFLOW = ".github/workflows/_pr-test-rust-ext-build.yml"
 DOWNLOAD_ACTION = ".github/actions/download-rust-ext/action.yml"
 
-# On `key:` lines only: the build workflow also hashes files for its cargo target
-# cache, which has a key of its own.
-_HASH_FILES = re.compile(r"key: .*hashFiles\(([^)]*)\)")
+_HASH_FILES = re.compile(r"hashFiles\(([^)]*)\)")
 _QUOTED = re.compile(r"'([^']*)'")
 
 

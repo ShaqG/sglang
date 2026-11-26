@@ -80,8 +80,7 @@ def fused_store_index_k_cache(
     Fused: quantize bf16 key (N,128) -> fp8 + fp32 scale and write into DSATokenToKVPool.index_k_with_scale_buffer.
 
     key:            (num_tokens, 128) bf16 (or reshapeable to it)
-    index_k_with_scale:  (num_pages, 64*(128+4)) uint8, one row per page; rows
-                         may be strided and are written in place
+    index_k_with_scale:  (num_pages, 64*(128+4)) uint8
     out_cache_loc:       (num_tokens,) int64 token indices in TokenToKVPool
     dcp_size, dcp_rank:  under DCP, out_cache_loc holds widened slots; only the
                          rank's own slots are stored, at row slot // dcp_size
@@ -105,8 +104,8 @@ def fused_store_index_k_cache(
         key = key.contiguous()
     if not out_cache_loc.is_contiguous():
         out_cache_loc = out_cache_loc.contiguous()
-    # The cache is the destination: a contiguous copy would drop the writes.
-    assert index_k_with_scale.stride(-1) == 1, f"{index_k_with_scale.stride()=}"
+    if not index_k_with_scale.is_contiguous():
+        index_k_with_scale = index_k_with_scale.contiguous()
 
     module = _jit_dsa_fused_store_module(key.dtype, out_cache_loc.dtype, page_size)
     module.fused_store_index_k_cache(

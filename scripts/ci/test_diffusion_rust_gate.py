@@ -16,7 +16,7 @@ class TestDiffusionRustGate(unittest.TestCase):
             "jobs"
         ]
         for name in ("rust-ext-build", "rust-ext-build-aarch64"):
-            for event in ("pull_request_target", "schedule", "workflow_dispatch"):
+            for event in ("pull_request", "schedule", "workflow_dispatch"):
                 for main, jit, kernel, diffusion in (
                     (False, False, False, True),
                     (True, False, False, True),
@@ -32,7 +32,6 @@ class TestDiffusionRustGate(unittest.TestCase):
                             "github.event_name": event,
                             "needs.check-changes.result": "success",
                             "needs.call-gate.result": "success",
-                            "needs.call-gate.outputs.opted-in": "true",
                             "needs.check-changes.outputs.main_package": str(
                                 main
                             ).lower(),
@@ -54,7 +53,7 @@ class TestDiffusionRustGate(unittest.TestCase):
                             " ".join(expression.split()), {"__builtins__": {}}
                         )
                         expected = (
-                            event != "pull_request_target"
+                            event != "pull_request"
                             or not diffusion
                             or main
                             or jit
@@ -65,11 +64,9 @@ class TestDiffusionRustGate(unittest.TestCase):
         caller = jobs["call-multimodal-gen-tests"]
         self.assertNotIn("rust-ext-build", caller["needs"])
         self.assertNotIn("rust_ext_artifact", caller["with"])
-        for workflow in ("pr-test-multimodal-gen.yml", "_diffusion-pr-test-stage.yml"):
-            with self.subTest(workflow=workflow):
-                callee = (ROOT / ".github/workflows" / workflow).read_text()
-                self.assertNotIn("download-rust-ext", callee)
-                self.assertNotIn("rust_ext_artifact", callee)
+        callee = (ROOT / ".github/workflows/pr-test-multimodal-gen.yml").read_text()
+        self.assertNotIn("download-rust-ext", callee)
+        self.assertNotIn("rust_ext_artifact", callee)
 
     def test_installer_preserves_srt_fallback(self):
         source = (ROOT / "scripts/ci/cuda/ci_install_dependency.sh").read_text()

@@ -6,19 +6,13 @@ import torch
 import triton
 import triton.language as tl
 
-from sglang.kernels.ops.attention.dsa.kpool_metadata.scan import (
-    _MIN_BLOCK_BS,
-    _MIN_BLOCK_EXPANDED,
-    _metadata_block,
-    bounded_scan_num_splits,
-)
+from sglang.kernels.ops.attention.dsa.kpool_metadata.scan import bounded_scan_num_splits
 
 
 @triton.jit(
     do_not_specialize=[
         "page_table_stride_0",
         "real_page_table_stride_0",
-        "bs",
         "total_len",
         "max_seqlen_k",
         "num_splits",
@@ -45,7 +39,7 @@ def _fused_dsa_draft_extend_metadata_kpool_kernel(
     page_table_stride_1: tl.constexpr,
     real_page_table_stride_0,
     real_page_table_stride_1: tl.constexpr,
-    bs,
+    bs: tl.constexpr,
     total_len,
     max_seqlen_k,
     num_splits,
@@ -268,8 +262,8 @@ def fused_dsa_draft_extend_metadata_kpool(
     else:
         assert page_table_1.is_cuda
 
-    block_bs = _metadata_block(bs, _MIN_BLOCK_BS)
-    block_expanded = _metadata_block(max_total_len, _MIN_BLOCK_EXPANDED)
+    block_bs = triton.next_power_of_2(bs)
+    block_expanded = triton.next_power_of_2(max_total_len)
     block_rows = triton.next_power_of_2(max_extend_len)
     block_n = 128
     num_col_blocks = triton.cdiv(max_seqlen_k, block_n)

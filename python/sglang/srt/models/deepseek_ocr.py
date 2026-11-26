@@ -21,6 +21,7 @@
 
 import copy
 import logging
+import math
 from array import array
 from functools import partial
 from typing import Iterable, List, Optional, Set, Tuple, Type, TypeAlias, Union
@@ -50,12 +51,18 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.deepseek import DeepseekForCausalLM
 from sglang.srt.models.deepseek_v2 import DeepseekV2ForCausalLM, DeepseekV3ForCausalLM
-from sglang.srt.models.step3_vl import get_abs_pos
 from sglang.srt.models.transformers import maybe_prefix
-from sglang.srt.utils import cdiv, cpu_has_amx_support, get_compiler_backend, is_cpu
+from sglang.srt.utils import (
+    cdiv,
+    cpu_has_amx_support,
+    get_compiler_backend,
+    is_cpu,
+    is_npu,
+)
 
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
+_is_npu = is_npu()
 
 NestedTensors: TypeAlias = Union[
     list["NestedTensors"],
@@ -907,6 +914,41 @@ def build_sam_vit_b(checkpoint=None, net_3_out_channels: int = 1024):
     )
 
 
+def get_abs_pos(abs_pos, tgt_size):
+    # abs_pos: L, C
+    # tgt_size: M
+    # return: M, C
+    dim = abs_pos.size(-1)
+    abs_pos_new = abs_pos.squeeze(0)
+    cls_token, old_pos_embed = abs_pos_new[:1], abs_pos_new[1:]
+
+    src_size = int(math.sqrt(abs_pos_new.shape[0] - 1))
+    tgt_size = int(math.sqrt(tgt_size))
+    dtype = abs_pos.dtype
+
+    if src_size != tgt_size:
+        old_pos_embed = (
+            old_pos_embed.view(1, src_size, src_size, dim)
+            .permute(0, 3, 1, 2)
+            .contiguous()
+        )
+        old_pos_embed = old_pos_embed.to(torch.float32)
+        new_pos_embed = F.interpolate(
+            old_pos_embed,
+            size=(tgt_size, tgt_size),
+            mode="bicubic",
+            antialias=True,
+            align_corners=False,
+        ).to(dtype)
+        new_pos_embed = new_pos_embed.permute(0, 2, 3, 1)
+        new_pos_embed = new_pos_embed.view(tgt_size * tgt_size, dim)
+        vision_pos_embed = torch.cat([cls_token, new_pos_embed], dim=0)
+        vision_pos_embed = vision_pos_embed.view(1, tgt_size * tgt_size + 1, dim)
+        return vision_pos_embed
+    else:
+        return abs_pos
+
+
 class CLIPVisionEmbeddings(nn.Module):
     def __init__(self, hidden_size=1024, image_size=224, patch_size=14, num_channels=3):
         super().__init__()
@@ -1010,7 +1052,7 @@ class NoTPAttention(torch.nn.Module):
         return output
 
 
-@torch.compile(dynamic=True, backend=get_compiler_backend())
+@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
 def quick_gelu(x):
     return x * torch.sigmoid(1.702 * x)
 

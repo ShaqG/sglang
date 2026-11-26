@@ -1,5 +1,7 @@
 import itertools
+import os
 
+import pytest
 import torch
 import triton
 from sgl_kernel import topk_softmax
@@ -182,13 +184,13 @@ def benchmark(num_tokens, num_experts, topk, provider):
         (num_tokens, num_experts), device="cuda", dtype=torch.float32
     )
 
-    if provider == "vllm":
+    if provider == "vllm" or provider == "vllm1":
         if not VLLM_AVAILABLE:
             return (0, 0, 0)
         fn = lambda: vllm_topk_softmax(gating_output, topk)
-    elif provider == "sglang":
+    elif provider == "sglang" or provider == "sglang1":
         fn = lambda: sglang_topk_softmax(gating_output, topk)
-    elif provider == "musa":
+    elif provider == "musa" or provider == "musa1":
         if not MUSA_AVAILABLE:
             return (0, 0, 0)
         fn = lambda: musa_topk_softmax_fn(gating_output, topk)

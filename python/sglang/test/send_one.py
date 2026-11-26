@@ -48,7 +48,6 @@ class BenchArgs:
     profile_steps: int = 5
     profile_by_stage: bool = False
     profile_prefix: Optional[str] = None
-    admin_api_key: Optional[str] = None
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
@@ -106,12 +105,6 @@ class BenchArgs:
         parser.add_argument("--profile-by-stage", action="store_true")
         parser.add_argument(
             "--profile-prefix", type=str, default=BenchArgs.profile_prefix
-        )
-        parser.add_argument(
-            "--admin-api-key",
-            type=str,
-            default=BenchArgs.admin_api_key,
-            help="The server's --admin-api-key, which --profile requires (default: SGLANG_ADMIN_API_KEY).",
         )
 
     @classmethod
@@ -212,7 +205,6 @@ def send_one_prompt(
             activities=["CPU", "GPU"],
             profile_by_stage=args.profile_by_stage,
             profile_prefix=args.profile_prefix,
-            admin_api_key=args.admin_api_key,
         )
 
     # Send the request

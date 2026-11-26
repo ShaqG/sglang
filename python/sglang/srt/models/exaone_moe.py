@@ -62,7 +62,6 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
 from sglang.srt.model_executor.runner import get_is_capture_mode
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-from sglang.srt.models.utils import apply_qk_norm
 from sglang.srt.runtime_context import get_exec, get_parallel, get_stream
 from sglang.srt.utils import LazyValue, is_cuda
 
@@ -200,10 +199,7 @@ class ExaoneMoESparseMoEBlock(nn.Module):
                 prefix=add_prefix("shared_experts", prefix),
                 **(
                     dict(parallel_group="replicated")
-                    if (
-                        get_moe_a2a_backend().is_deepep()
-                        or get_moe_a2a_backend().is_ascend_ops()
-                    )
+                    if get_moe_a2a_backend().is_deepep()
                     else {}
                 ),
             )
@@ -275,7 +271,7 @@ class ExaoneMoESparseMoEBlock(nn.Module):
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
 
-        if get_moe_a2a_backend().is_deepep() or get_moe_a2a_backend().is_ascend_ops():
+        if get_moe_a2a_backend().is_deepep():
             return self._forward_deepep(hidden_states, forward_batch)
 
         if (
@@ -311,11 +307,9 @@ class ExaoneMoEAttention(nn.Module):
         quant_config: Optional[QuantizationConfig] = None,
         bias: bool = False,
         prefix: str = "",
-        alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
-        self.alt_stream = alt_stream
         attn_tp_size = get_parallel().attn_tp_size
 
         self.total_num_heads = num_heads
@@ -412,14 +406,13 @@ class ExaoneMoEAttention(nn.Module):
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
-        q, k = apply_qk_norm(
-            q=q,
-            k=k,
-            q_norm=self.q_norm,
-            k_norm=self.k_norm,
-            head_dim=self.head_dim,
-            alt_stream=self.alt_stream,
-        )
+        q = q.reshape(-1, self.head_dim)
+        q = self.q_norm(q)
+        q = q.reshape(-1, self.num_heads * self.head_dim)
+
+        k = k.reshape(-1, self.head_dim)
+        k = self.k_norm(k)
+        k = k.reshape(-1, self.num_kv_heads * self.head_dim)
 
         if self.sliding_window or self.apply_rope_all_layers:
             q, k = self.rotary_emb(positions, q, k)
@@ -470,7 +463,6 @@ class ExaoneMoEDecoderLayer(nn.Module):
             quant_config=quant_config,
             bias=attention_bias,
             prefix=add_prefix("self_attn", prefix),
-            alt_stream=alt_stream,
         )
 
         attn, ffn = self.stage_facts(config, layer_id)

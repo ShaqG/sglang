@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-register_npu_ci(est_time=400, suite="full-test-1-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="full-1-npu-a3", nightly=True)
 
 
 class TestNpuApi(CustomTestCase):
@@ -36,8 +36,7 @@ class TestNpuApi(CustomTestCase):
         other_args = [
             "--attention-backend",
             "ascend",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--tp-size",
             2,
             "--is-embedding",

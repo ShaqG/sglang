@@ -14,8 +14,8 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_npu_ci(est_time=400, suite="extra-b-test-8-npu-a3")
-register_npu_ci(est_time=400, suite="nightly-test-8-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="base-b-test-8-npu-a3")
+register_npu_ci(est_time=400, suite="nightly-8-npu-a3", nightly=True)
 
 
 class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
@@ -32,8 +32,7 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
     common_args = [
         "--attention-backend",
         "ascend",
-        "--disable-decode-cuda-graph",
-        "--disable-prefill-cuda-graph",
+        "--disable-cuda-graph",
         "--trust-remote-code",
         "--chunked-prefill-size",
         "1024",
@@ -85,7 +84,7 @@ class TestEplbMinRebalancingUtilizationThresholdBase(CustomTestCase):
                 "TRANSFORMERS_VERBOSITY": "error",
                 "DEEP_NORMAL_MODE_USE_INT8_QUANT": "1",
                 **os.environ,
-                "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+                "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True,pin_memory_expandable_segments:True",
             },
             return_stdout_stderr=(cls.out_file, cls.err_file),
         )
@@ -162,7 +161,7 @@ class TestEplbMinRebalancingUtilizationThreshold095(
                 "TRANSFORMERS_VERBOSITY": "error",
                 "DEEP_NORMAL_MODE_USE_INT8_QUANT": "1",
                 **os.environ,
-                "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+                "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True,pin_memory_expandable_segments:True",
             },
             return_stdout_stderr=(cls.out_file, cls.err_file),
         )

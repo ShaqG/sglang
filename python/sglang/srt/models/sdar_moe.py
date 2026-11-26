@@ -134,7 +134,6 @@ class SDARMoeSparseMoeBlock(nn.Module):
     ) -> torch.Tensor:
         if (
             not get_moe_a2a_backend().is_deepep()
-            and not get_moe_a2a_backend().is_ascend_ops()
             and not get_moe_a2a_backend().is_ascend_fuseep()
         ):
             return self.forward_normal(hidden_states)

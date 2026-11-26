@@ -12,12 +12,8 @@ written by the slash-command handler):
 The leading 🚀 on the line is the visual anchor that this came from a
 slash-command trigger and is preserved across all states.
 
-A rerun of the workflow run (another attempt) runs the finalizer again, and
-its result replaces the icon on the :done line.
-
 Idempotency:
-- :done marker present and status running  -> no-op (covers the beacon of a
-  rerun and the start-after-finalizer race)
+- :done marker present  -> no-op (covers reruns and start-after-finalizer race)
 - running and line already has 🔄  -> no-op
 - marker not found after retries  -> warn and exit 0 so a single placeholder
   glitch does not amplify into N noisy job failures.
@@ -37,10 +33,7 @@ import time
 import urllib.error
 import urllib.request
 
-# /rerun-test's handler writes the markers in one edit after dispatching every
-# batch, 5 to 35 seconds each, so an early batch's runner or a fast-failing run
-# can get here minutes before its marker exists. 300 seconds in all.
-RETRY_DELAYS_SEC = [0, 5, 10, 15] + [30] * 9
+RETRY_DELAYS_SEC = [0, 5, 15]
 
 STATUS_ICONS = {
     "running": "🔄",
@@ -103,13 +96,9 @@ def main():
             return 1
         body = json.loads(text).get("body") or ""
         if done_marker in body:
-            if not is_terminal:
-                print(f"Marker {done_marker} already present; nothing to do.")
-                return 0
-            line_marker = done_marker
-            break
+            print(f"Marker {done_marker} already present; nothing to do.")
+            return 0
         if args.marker in body:
-            line_marker = args.marker
             break
         print(
             f"Marker {args.marker} not found "
@@ -125,11 +114,11 @@ def main():
 
     new_lines = []
     for line in body.splitlines(keepends=True):
-        if line_marker in line:
+        if args.marker in line:
             if not is_terminal and icon in line:
                 print(f"Line already has {icon}; nothing to do.")
                 return 0
-            for prior in ("⏳", "🔄", "✅", "❌"):
+            for prior in ("⏳", "🔄"):
                 if prior in line:
                     line = line.replace(prior, icon, 1)
                     break

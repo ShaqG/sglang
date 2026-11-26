@@ -16,7 +16,6 @@ use crate::state::kv_events::{
 use crate::state::load_monitor::engine_reported_load::EngineReportedLoadTable;
 use crate::state::load_monitor::router_inflight_load::RouterInflightLoadRegistry;
 use crate::tokenizer::TokenizerRegistry;
-use crate::workers::control::WorkerControlService;
 use crate::workers::{DecodeGate, WorkerRegistry};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -55,7 +54,6 @@ pub struct AppContext {
     pub tokenizers: Arc<TokenizerRegistry>,
     pub proxy: Arc<Proxy>,
     pub registry: Arc<WorkerRegistry>,
-    pub worker_control: Option<Arc<WorkerControlService>>,
     pub policies: Arc<PolicyRegistry>,
     /// Converts static Bucket configuration into request candidate domains.
     pub bucket_selector: Arc<BucketSelector>,
@@ -138,7 +136,6 @@ impl AppContext {
             tokenizers,
             proxy,
             registry,
-            worker_control: None,
             policies,
             bucket_selector,
             chat_routing: ChatRouting::Legacy,
@@ -225,7 +222,6 @@ impl AppContext {
                     decode_policy: Default::default(),
                     dp_aware: false,
                     dp_rank_policy: Default::default(),
-                    decode_dp_rank_policy: None,
                     bucket_config: None,
                     reorg_buckets: None,
                     reorg_admission: Default::default(),
@@ -249,7 +245,6 @@ impl AppContext {
             tokenizers: Arc::new(TokenizerRegistry::default()),
             proxy: Arc::new(Proxy::new(std::time::Duration::from_secs(60)).expect("stub proxy")),
             registry: Arc::new(WorkerRegistry::default()),
-            worker_control: None,
             policies: Arc::new(PolicyRegistry::default()),
             bucket_selector: Arc::new(BucketSelector::new(None)),
             chat_routing: ChatRouting::Legacy,

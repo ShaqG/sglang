@@ -99,9 +99,10 @@ def run_sgl_diffusion_webui(server_args: ServerArgs):
         guidance_scale,
         enable_teacache,
     ):
-        """Gradio click handler.
-
-        Returns (image, None) for image tasks or (None, video_path) for video tasks.
+        """
+        NOTE: The input and output of function which is called by gradio button must be gradio components
+        So we use global variable sampling_params_kwargs to avoid pass this param, because gradio does not support this.
+        return [ np.ndarray, None ] | [None, np.ndarray]
         """
         if reference_image_paths_str:
             if "，" in reference_image_paths_str:

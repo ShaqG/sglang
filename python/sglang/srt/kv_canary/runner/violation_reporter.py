@@ -5,7 +5,6 @@ import logging
 from sglang.kernels.ops.kv_canary.consts import FailReason
 from sglang.kernels.ops.kv_canary.verify import CanaryLaunchTag
 from sglang.srt.kv_canary.config import CanaryConfig, CanaryMode
-from sglang.srt.kv_canary.endpoint import is_sweep_tag
 from sglang.srt.kv_canary.state import CanaryDeviceState
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,12 @@ class ViolationReporter:
 
 def _canary_kind_label(tag: CanaryLaunchTag) -> str:
     name_lower = tag.name.lower()
-    if is_sweep_tag(tag):
+    if tag in (
+        CanaryLaunchTag.SWEEP_K_FULL,
+        CanaryLaunchTag.SWEEP_V_FULL,
+        CanaryLaunchTag.SWEEP_K_SWA,
+        CanaryLaunchTag.SWEEP_V_SWA,
+    ):
         return name_lower
     return f"per_forward_{name_lower}"
 

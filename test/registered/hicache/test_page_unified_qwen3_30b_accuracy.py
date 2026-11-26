@@ -231,8 +231,7 @@ class TestPageUnifiedQwen330BAccuracy(CustomTestCase):
     def _canonical_files(self, cases, namespace):
         digest = namespace_digest(
             derive_namespace(
-                # As storage_model_name() builds it; this pool adds no format tag.
-                model_id=f"{self.model_path}-dtype_bfloat16",
+                model_id=self.model_path,
                 dtype="bfloat16",
                 page_size=self.page_size,
                 rank_replicated=False,

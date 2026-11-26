@@ -23,6 +23,7 @@ class PureSWARadixCache(RadixCache):
     def __init__(self, params: CacheInitParams):
         super().__init__(params)
         self.sliding_window_size = params.sliding_window_size
+        self.draft_window_reaches = params.draft_window_reaches
 
     def supports_swa(self) -> bool:
         assert self.sliding_window_size is not None, (
@@ -30,15 +31,11 @@ class PureSWARadixCache(RadixCache):
         )
         return True
 
-    def _keeps(self, sub_pool: str) -> bool:
-        # Every layer is a window layer: the tree's one pool is the window's.
-        return sub_pool in self.token_to_kv_pool_allocator.window_pool_names()
+    def swa_evictable_size(self):
+        return self.evictable_size_
 
-    def window_evictable_size(self, sub_pool: str) -> int:
-        return self.evictable_size_ if self._keeps(sub_pool) else 0
-
-    def window_protected_size(self, sub_pool: str) -> int:
-        return self.protected_size_ if self._keeps(sub_pool) else 0
+    def swa_protected_size(self):
+        return self.protected_size_
 
     def full_evictable_size(self):
         return 0
@@ -52,15 +49,15 @@ class PureSWARadixCache(RadixCache):
         pass
 
     def evict(self, params: EvictParams) -> EvictResult:
-        """An all-SWA model keeps one pool: window tokens and tokens are
-        evicted from it alike."""
-        num_tokens = max(params.num_tokens, *params.window_num_tokens.values(), 0)
+        """For all-SWA models, evict_from_tree_cache passes swa_num_tokens
+        (with num_tokens=0). Use whichever is non-zero."""
+        num_tokens = max(params.num_tokens, params.swa_num_tokens)
         return super().evict(EvictParams(num_tokens=num_tokens))
 
     def available_and_evictable_str(self) -> str:
         allocator = self.token_to_kv_pool_allocator
         swa_available = allocator.swa_available_size()
-        swa_evictable = self.evictable_size_
+        swa_evictable = self.swa_evictable_size()
         return (
             f"SWA available tokens: {swa_available + swa_evictable} "
             f"({swa_available=} + {swa_evictable=})\n"

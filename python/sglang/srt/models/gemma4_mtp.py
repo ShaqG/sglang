@@ -212,16 +212,10 @@ class Gemma4AssistantForCausalLM(Gemma4ForCausalLM):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    @staticmethod
-    def sliding_layer_window_size(config) -> int:
+    def get_attention_sliding_window_size(self) -> int:
         # Gemma 4 config treats the bound as inclusive; SGLang attention metadata
         # uses an exclusive window size, matching the target Gemma 4 models.
-        # Before load the config may still wrap the text config the built
-        # model keeps.
-        return _get_text_config(config).sliding_window - 1
-
-    def get_attention_sliding_window_size(self) -> int:
-        return self.sliding_layer_window_size(self.config)
+        return self.config.sliding_window - 1
 
     @torch.no_grad()
     def forward(

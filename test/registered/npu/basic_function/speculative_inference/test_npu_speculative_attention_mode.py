@@ -19,7 +19,7 @@ from sglang.test.test_utils import (
 
 register_npu_ci(
     est_time=400,
-    suite="full-test-4-npu-a3",
+    suite="full-4-npu-a3",
     nightly=True,
 )
 
@@ -76,8 +76,7 @@ class TestNpuSpeculativeAttentionMode(CustomTestCase):
             "4",
             "--mem-fraction-static",
             "0.7",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--dtype",
             "bfloat16",
         ]

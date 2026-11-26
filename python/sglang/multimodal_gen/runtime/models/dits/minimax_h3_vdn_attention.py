@@ -301,9 +301,7 @@ def _vdn_window_softmax(
         q_sm, k_sm = _apply_qk_norm(
             q.clone(), k.clone(), attention.q_norm, attention.k_norm, attention.head_dim
         )
-        q_sm, k_sm = _apply_rope_qk(
-            q_sm, k_sm, cos_sin_cache, positions, rotary_emb=attention.rotary_emb
-        )
+        q_sm, k_sm = _apply_rope_qk(q_sm, k_sm, cos_sin_cache, positions)
     return attention._attention_impl.forward_varlen(
         q_sm,
         k_sm,

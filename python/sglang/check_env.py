@@ -226,8 +226,12 @@ class GPUEnv(BaseEnv):
                 text=True,
                 check=True,
             )
-            return {"NVIDIA Topology": "\n" + result.stdout}
-        except (subprocess.SubprocessError, OSError):
+            return {
+                "NVIDIA Topology": (
+                    "\n" + result.stdout if result.returncode == 0 else None
+                )
+            }
+        except subprocess.SubprocessError:
             return {}
 
 
@@ -287,7 +291,7 @@ class HIPEnv(BaseEnv):
             ver = ver.replace('"Driver version", ', "").replace('"', "")
 
             return {"ROCM Driver Version": ver}
-        except (subprocess.SubprocessError, OSError):
+        except subprocess.SubprocessError:
             return {"ROCM Driver Version": "Not Available"}
 
     def get_topology(self):
@@ -299,8 +303,10 @@ class HIPEnv(BaseEnv):
                 text=True,
                 check=True,
             )
-            return {"AMD Topology": "\n" + result.stdout}
-        except (subprocess.SubprocessError, OSError):
+            return {
+                "AMD Topology": "\n" + result.stdout if result.returncode == 0 else None
+            }
+        except subprocess.SubprocessError:
             return {}
 
 
@@ -402,7 +408,7 @@ class NPUEnv(BaseEnv):
                 subprocess.check_output([bisheng, "--version"]).decode("utf-8").strip()
             )
             cann_info["BiSheng"] = bisheng_output.split("\n")[0].strip()
-        except (subprocess.SubprocessError, OSError):
+        except subprocess.SubprocessError:
             cann_info["BiSheng"] = "Not Available"
         return cann_info
 
@@ -426,7 +432,7 @@ class NPUEnv(BaseEnv):
                 version = "Not Available"
 
             return {"Ascend Driver Version": version}
-        except (subprocess.SubprocessError, OSError):
+        except subprocess.SubprocessError:
             return {"Ascend Driver Version": "Not Available"}
 
     def get_topology(self):
@@ -438,8 +444,12 @@ class NPUEnv(BaseEnv):
                 text=True,
                 check=True,
             )
-            return {"Ascend Topology": "\n" + result.stdout}
-        except (subprocess.SubprocessError, OSError):
+            return {
+                "Ascend Topology": (
+                    "\n" + result.stdout if result.returncode == 0 else None
+                )
+            }
+        except subprocess.SubprocessError:
             return {}
 
 
@@ -509,7 +519,7 @@ class MUSAEnv(BaseEnv):
                     break
 
             return {"MUSA Driver Version": driver_version}
-        except (subprocess.SubprocessError, OSError):
+        except subprocess.SubprocessError:
             return {"MUSA Driver Version": "Not Available"}
 
     def get_topology(self):
@@ -524,8 +534,12 @@ class MUSAEnv(BaseEnv):
                 text=True,
                 check=True,
             )
-            return {"MTHREADS Topology": "\n" + result.stdout}
-        except (subprocess.SubprocessError, OSError):
+            return {
+                "MTHREADS Topology": (
+                    "\n" + result.stdout if result.returncode == 0 else None
+                )
+            }
+        except subprocess.SubprocessError:
             return {}
 
 

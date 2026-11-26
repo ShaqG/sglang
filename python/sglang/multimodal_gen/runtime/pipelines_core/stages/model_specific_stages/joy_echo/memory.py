@@ -18,7 +18,6 @@ from torchvision.transforms import functional as TVF
 from sglang.multimodal_gen.configs.pipeline_configs.joy_echo import (
     JoyEchoPipelineConfig,
 )
-from sglang.multimodal_gen.runtime.cache.conditioning import use_gpu_conditioning_hash
 from sglang.multimodal_gen.runtime.distributed import get_local_torch_device
 from sglang.multimodal_gen.runtime.pipelines_core.schedule_batch import OutputBatch, Req
 from sglang.multimodal_gen.runtime.pipelines_core.stages.base import PipelineStage
@@ -367,8 +366,7 @@ def encode_memory_frames_batch(
                 .unsqueeze(0)
                 .to(device=device, dtype=dtype)
             )
-            with use_gpu_conditioning_hash(enabled=is_clip_memory):
-                encode_output = video_vae.encode(frame_video, return_dict=True)
+            encode_output = video_vae.encode(frame_video, return_dict=True)
             latent = encode_output.sample
             if latent.ndim != 5:
                 raise ValueError(

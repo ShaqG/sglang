@@ -183,10 +183,8 @@ class GSM8KMixin:
     gsm8k_temperature: Optional[float] = None
     gsm8k_top_p: Optional[float] = None
 
-    flush_cache_headers: Optional[dict] = None
-
     def test_gsm8k(self):
-        requests.get(self.base_url + "/flush_cache", headers=self.flush_cache_headers)
+        requests.get(self.base_url + "/flush_cache")
         threshold = self.gsm8k_score_threshold
         if threshold != threshold:  # canonical unset (NaN) -> legacy alias
             threshold = self.gsm8k_accuracy_thres

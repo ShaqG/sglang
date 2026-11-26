@@ -17,9 +17,7 @@ place; it is never exchanged.
 ``partial``, ``out`` and ``scales`` are this rank's views of symmetric,
 multicast-bound buffers whose multicast VAs the caller passes alongside (a
 :func:`~sglang.srt.layers.communication.gemma4_ar_fusion.symm_buffer`). Every
-rank must call with the same shapes and ``num_blocks``. ``scales`` may be
-strided, e.g. DeepGEMM's column-major layout with 16-byte aligned columns; it
-must start at the address its multicast VA maps.
+rank must call with the same shapes and ``num_blocks``.
 
 The hidden size and the block width are compiled in; :func:`threads_for` picks
 the width. Needs :func:`register_comm` once per process.
@@ -27,7 +25,7 @@ the width. Needs :func:`register_comm` once per process.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Optional
 
 import torch
 
@@ -37,7 +35,6 @@ from sglang.kernels.jit.utils import (
     load_jit,
     make_cpp_args,
 )
-from sglang.kernels.ops.communication.comm_registry import CommRegistry
 
 if TYPE_CHECKING:
     from tvm_ffi.module import Module
@@ -72,14 +69,25 @@ def _jit_module(hidden: int, threads: int) -> Module:
     )
 
 
-_COMMS = CommRegistry("gemma4_ar_fusion")
+_COMM_MAP: dict[int, Communicator] = {}
 
 
-def register_comm(provider: Callable[[], Communicator], *, world_size: int) -> None:
-    """Register the provider of the communicator these ops launch over; it runs on
-    first launch (see ``CommRegistry``). The fused sites barrier on its pull semaphores.
-    """
-    _COMMS.register(provider, world_size=world_size)
+def register_comm(comm: Communicator) -> None:
+    """Register the CustomAllReduceV2 communicator whose pull plane the kernels
+    barrier on. Keyed on world_size like :mod:`all_reduce_residual`, so one
+    group per size per process."""
+    prev = _COMM_MAP.get(comm.world_size)
+    assert prev is None or prev is comm, (
+        f"a different communicator is already registered for world_size="
+        f"{comm.world_size}"
+    )
+    _COMM_MAP[comm.world_size] = comm
+
+
+def _comm(world_size: int) -> Communicator:
+    comm = _COMM_MAP.get(world_size)
+    assert comm is not None, f"call register_comm for world_size={world_size} first"
+    return comm
 
 
 def site(
@@ -107,7 +115,7 @@ def site(
     ``num_blocks`` defaults to the barrier plane's capacity."""
     hidden = partial.shape[1]
     _jit_module(hidden, threads_for(hidden)).site(
-        _COMMS.get(world_size),
+        _comm(world_size),
         partial,
         partial_mc,
         out,
@@ -145,7 +153,7 @@ def final(
     bf16 in ``out``, which may be ``partial`` itself."""
     hidden = partial.shape[1]
     _jit_module(hidden, threads_for(hidden)).final(
-        _COMMS.get(world_size),
+        _comm(world_size),
         partial,
         partial_mc,
         out,

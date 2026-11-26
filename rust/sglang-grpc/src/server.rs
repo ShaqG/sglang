@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pyo3::PyErr;
 use pyo3::Python;
-use pyo3::exceptions::{PyPermissionError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use tokio::sync::{Notify, mpsc::Receiver, watch};
 use tokio::time::{Duration, timeout};
 use tokio_stream::Stream;
@@ -162,21 +162,14 @@ fn resolve_max_message_size() -> usize {
 ///
 /// `PyValueError` / `PyTypeError` mean the client sent bad input — surface as
 /// `INVALID_ARGUMENT` so callers can distinguish them from server failures.
-/// `PyPermissionError` means the runtime handle refuses to serve the RPC at
-/// all: `PERMISSION_DENIED`. Everything else (typically `PyRuntimeError`, but
-/// also Python tracebacks from inside the tokenizer manager) maps to
-/// `INTERNAL`.
+/// Everything else (typically `PyRuntimeError`, but also Python tracebacks
+/// from inside the tokenizer manager) maps to `INTERNAL`.
 fn pyerr_to_status(err: PyErr, context: &str) -> Status {
-    let (refused, is_client_error) = Python::attach(|py| {
-        (
-            err.is_instance_of::<PyPermissionError>(py),
-            err.is_instance_of::<PyValueError>(py) || err.is_instance_of::<PyTypeError>(py),
-        )
+    let is_client_error = Python::attach(|py| {
+        err.is_instance_of::<PyValueError>(py) || err.is_instance_of::<PyTypeError>(py)
     });
     let msg = format!("{}: {}", context, err);
-    if refused {
-        Status::permission_denied(msg)
-    } else if is_client_error {
+    if is_client_error {
         Status::invalid_argument(msg)
     } else {
         Status::internal(msg)

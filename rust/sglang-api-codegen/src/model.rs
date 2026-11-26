@@ -179,8 +179,6 @@ pub enum MessageKind {
     TaggedUnion {
         oneof_mod: String,
         oneof_ident: String,
-        /// The prost struct field holding the oneof (its snake_case name).
-        oneof_field: String,
         tag: String,
         variants: Vec<VariantModel>,
         passthrough: Option<VariantModel>,
@@ -297,7 +295,6 @@ fn message_model(msg: &MessageDescriptor, ext: &Extensions) -> MessageModel {
             .unwrap_or(false);
         let oneof_mod = snake(&rust_name);
         let oneof_ident = pascal(oneof.name());
-        let oneof_field = snake(oneof.name());
 
         let mut variants: Vec<VariantModel> = oneof
             .fields()
@@ -347,7 +344,6 @@ fn message_model(msg: &MessageDescriptor, ext: &Extensions) -> MessageModel {
                 kind: MessageKind::TaggedUnion {
                     oneof_mod,
                     oneof_ident,
-                    oneof_field,
                     tag,
                     variants,
                     passthrough,

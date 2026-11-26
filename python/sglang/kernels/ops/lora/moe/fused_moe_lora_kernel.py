@@ -5,6 +5,10 @@ import triton
 import triton.language as tl
 
 from sglang.kernels.arch import current_arch
+from sglang.srt.distributed import (
+    tensor_model_parallel_all_gather,
+    tensor_model_parallel_all_reduce,
+)
 
 _LORA_PTR_DICT: dict[tuple[int, ...], torch.Tensor] = {}
 
@@ -433,6 +437,7 @@ def _fused_moe_lora(
     expand_num_stages: int,
     expand_split_k: int,
     mul_routed_weight: bool = False,
+    fully_sharded: bool = False,
     offset: int = 0,
 ) -> None:
     assert len(lora_a_stacked) == len(lora_b_stacked) > 0
@@ -509,6 +514,19 @@ def _fused_moe_lora(
         mul_routed_weight=False,
     )
 
+    if fully_sharded:
+        if max_lora_rank == w1_lora_b_stacked.shape[-1]:
+            a_intermediate_cache1 = tensor_model_parallel_all_reduce(
+                a_intermediate_cache1
+            )
+        else:
+            a_intermediate_cache1 = tensor_model_parallel_all_gather(
+                a_intermediate_cache1
+            )
+
+            # reset max_lora_rank to the full rank after allgather
+            max_lora_rank = a_intermediate_cache1.shape[-1]
+
     _fused_moe_lora_expand(
         output,
         a_intermediate_cache1,
@@ -572,6 +590,7 @@ def _fused_moe_lora_fake(
     expand_num_stages: int,
     expand_split_k: int,
     mul_routed_weight: bool = False,
+    fully_sharded: bool = False,
     offset: int = 0,
 ) -> None:
     return

@@ -12,6 +12,8 @@ namespace ngram {
 struct Result {
   std::vector<int32_t> token;
   std::vector<uint8_t> mask;
+
+  void truncate(size_t n);
 };
 
 struct Node {

@@ -51,8 +51,6 @@ pub struct EngineProfile {
     pub openai: Option<Arc<OpenAiSettings>>,
     /// The engine's native gRPC port; `None` means gRPC clients cannot reach it.
     pub grpc_port: Option<u16>,
-    /// The engine's chat template renders a system message after the first.
-    pub supports_inline_system: bool,
 }
 
 impl From<WireProtocol> for EngineProfile {
@@ -62,7 +60,6 @@ impl From<WireProtocol> for EngineProfile {
             dp_ranks: 1,
             openai: None,
             grpc_port: None,
-            supports_inline_system: false,
         }
     }
 }
@@ -91,20 +88,19 @@ fn grpc_client(host: &str, port: u16) -> Option<SglangServiceClient<tonic::trans
 pub struct DpRankGuard {
     inflight: Arc<[AtomicUsize]>,
     rank: usize,
-    stamp: Option<(Arc<[SlotRegistry]>, u64)>,
 }
 
 impl Drop for DpRankGuard {
     fn drop(&mut self) {
         self.inflight[self.rank].fetch_sub(1, Ordering::Relaxed);
-        if let Some((slots, id)) = &self.stamp {
-            slots[self.rank].release(*id);
-        }
     }
 }
 
-/// Falls back to `"localhost"` rather than panicking: one bad config entry must
-/// not crash the router.
+/// Parse a host from a worker URL. Matches SMG's `worker_builder.rs`
+/// fallback chain: parse as-is, retry with `http://` prefix if missing,
+/// fall back to `"localhost"` if both fail. The fallback is defensive —
+/// discovery code should never emit an unparsable URL — but a panic
+/// here would crash the whole router on a single bad config entry.
 fn parse_bootstrap_host(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {
         if let Some(h) = parsed.host_str() {
@@ -131,7 +127,7 @@ fn parse_bootstrap_host(url: &str) -> String {
 /// registry is separate from [`Worker::active_requests`]: ordinary load
 /// tracking stays lock-free, while policies that correct an engine snapshot
 /// explicitly opt into timestamp tracking.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SlotRegistry {
     slots: Mutex<HashMap<u64, Instant>>,
     next_id: AtomicU64,
@@ -257,13 +253,9 @@ pub struct Worker {
     services: RwLock<BTreeSet<String>>,
     /// Router in-flight requests per DP rank; one slot per rank.
     dp_rank_inflight: Arc<[AtomicUsize]>,
-    /// Timestamped dispatches per DP rank, claimed only by
-    /// [`Worker::dp_rank_timestamped_guard`].
-    dp_rank_slots: Arc<[SlotRegistry]>,
     /// Round-robin position over this worker's DP ranks.
     dp_rank_turn: AtomicUsize,
     openai: Option<Arc<OpenAiSettings>>,
-    supports_inline_system: bool,
 }
 
 impl Worker {
@@ -284,7 +276,6 @@ impl Worker {
             dp_ranks,
             openai,
             grpc_port,
-            supports_inline_system,
         } = profile.into();
         let breaker = match cb {
             Some(cfg) => Arc::new(CircuitBreaker::with_config(cfg)),
@@ -310,21 +301,13 @@ impl Worker {
             version_group: spec.version_group,
             services: RwLock::new(spec.services),
             dp_rank_inflight: (0..dp_ranks.max(1)).map(|_| AtomicUsize::new(0)).collect(),
-            dp_rank_slots: (0..dp_ranks.max(1))
-                .map(|_| SlotRegistry::default())
-                .collect(),
             dp_rank_turn: AtomicUsize::new(0),
             openai,
-            supports_inline_system,
         }
     }
 
     pub fn openai_settings(&self) -> Option<&Arc<OpenAiSettings>> {
         self.openai.as_ref()
-    }
-
-    pub fn supports_inline_system(&self) -> bool {
-        self.supports_inline_system
     }
 
     pub fn services(&self) -> BTreeSet<String> {
@@ -422,33 +405,12 @@ impl Worker {
     }
 
     pub fn dp_rank_guard(&self, rank: u32) -> DpRankGuard {
-        self.guard_rank(rank, false)
-    }
-
-    /// [`Self::dp_rank_guard`] that also stamps the dispatch, so
-    /// [`Self::dp_rank_dispatched_since`] can correct an engine reading.
-    pub fn dp_rank_timestamped_guard(&self, rank: u32) -> DpRankGuard {
-        self.guard_rank(rank, true)
-    }
-
-    fn guard_rank(&self, rank: u32, stamped: bool) -> DpRankGuard {
         let rank = rank as usize;
         self.dp_rank_inflight[rank].fetch_add(1, Ordering::Relaxed);
-        let stamp = stamped.then(|| {
-            let id = self.dp_rank_slots[rank].claim();
-            (Arc::clone(&self.dp_rank_slots), id)
-        });
         DpRankGuard {
             inflight: Arc::clone(&self.dp_rank_inflight),
             rank,
-            stamp,
         }
-    }
-
-    /// Stamped requests still in flight on `rank` that were dispatched at or
-    /// after `since`.
-    pub fn dp_rank_dispatched_since(&self, rank: u32, since: Instant) -> usize {
-        self.dp_rank_slots[rank as usize].count_acquired_since(since)
     }
 
     pub fn router_inflight_load(&self) -> usize {

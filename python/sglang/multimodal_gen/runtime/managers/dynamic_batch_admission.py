@@ -75,6 +75,7 @@ class BatchingRule:
     offload: bool | None = None
     max_batch_size: int = 1
     max_cost: float | None = None
+    source: str = "user"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, source: str) -> BatchingRule:
@@ -96,6 +97,7 @@ class BatchingRule:
             offload=_optional_bool(data.get("offload")),
             max_batch_size=int(data["max_batch_size"]),
             max_cost=_optional_float(data.get("max_cost")),
+            source=source,
         )
         rule.validate()
         return rule

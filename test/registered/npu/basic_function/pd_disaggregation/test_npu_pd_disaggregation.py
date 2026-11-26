@@ -19,10 +19,11 @@ from sglang.test.server_fixtures.disaggregation_fixture import (
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     popen_launch_pd_server,
+    popen_with_error_check,
 )
 
-register_npu_ci(est_time=400, suite="extra-b-test-4-npu-a3")
-register_npu_ci(est_time=400, suite="nightly-test-4-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="base-b-test-4-npu-a3")
+register_npu_ci(est_time=400, suite="nightly-4-npu-a3", nightly=True)
 
 
 class DisaggregationHiCacheBase(PDDisaggregationServerBase):
@@ -50,7 +51,8 @@ class DisaggregationHiCacheBase(PDDisaggregationServerBase):
         cls.wait_server_ready(cls.prefill_url + "/health")
         cls.wait_server_ready(cls.decode_url + "/health")
 
-        cls.launch_lb()
+        cls.launch_router()
+        cls.wait_server_ready(cls.lb_url + "/health")
         time.sleep(10)
 
     @classmethod
@@ -81,12 +83,13 @@ class DisaggregationHiCacheBase(PDDisaggregationServerBase):
             "wait_complete",
             "--mem-fraction-static",
             "0.9",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
         ]
         env = {
             **os.environ,
-            "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+            "PYTORCH_NPU_ALLOC_CONF": (
+                "expandable_segments:True,pin_memory_expandable_segments:True"
+            ),
             "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR": cls.temp_dir,
             "ASCEND_MF_STORE_URL": "tcp://127.0.0.1:24667",
         }
@@ -101,6 +104,26 @@ class DisaggregationHiCacheBase(PDDisaggregationServerBase):
     @classmethod
     def start_decode(cls):
         pass
+
+    @classmethod
+    def launch_router(cls):
+        lb_command = [
+            "python3",
+            "-m",
+            "sglang_router.launch_router",
+            "--pd-disaggregation",
+            "--prefill",
+            cls.prefill_url,
+            cls.bootstrap_port,
+            "--decode",
+            cls.decode_url,
+            "--host",
+            cls.base_host,
+            "--port",
+            cls.lb_port,
+        ]
+        cls.process_lb = popen_with_error_check(lb_command)
+        cls.wait_server_ready(cls.lb_url + "/health")
 
     def gen_prompt(self, token_num: int) -> str:
         # Generate a string consisting of random tokens.
@@ -185,7 +208,9 @@ class TestDisaggregationDecodeWithHiCache(DisaggregationHiCacheBase):
 
         env = {
             **os.environ,
-            "PYTORCH_NPU_ALLOC_CONF": "expandable_segments:True",
+            "PYTORCH_NPU_ALLOC_CONF": (
+                "expandable_segments:True,pin_memory_expandable_segments:True"
+            ),
             "SGLANG_HICACHE_FILE_BACKEND_STORAGE_DIR": cls.temp_dir,
             "ASCEND_MF_STORE_URL": "tcp://127.0.0.1:24667",
         }

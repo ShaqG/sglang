@@ -15,7 +15,6 @@ maybe_stub_sgl_kernel()
 
 from sglang.srt.managers.schedule_batch import NextBatchPlan
 from sglang.srt.managers.scheduler import Scheduler
-from sglang.srt.managers.scheduler_components.pause_state import PauseState
 from sglang.srt.managers.scheduler_components.request_list import (
     IndexedReqList,
     KeyedReqList,
@@ -34,9 +33,7 @@ class TestSchedulerHiCacheEvents(unittest.TestCase):
         s.enable_unified_cache_external_linker = False
         s.enable_lmcache = False
         s.enable_hicache_storage = True
-        s.tree_cache = SimpleNamespace(
-            buffer_pipeline=None, check_hicache_events=self.calls.drain
-        )
+        s.tree_cache = SimpleNamespace(check_hicache_events=self.calls.drain)
         s._process_storage_prefetch_retries = self.calls.retry
         s.process_pending_chunked_abort = Mock()
         s.process_prefill_chunk = Mock()
@@ -107,7 +104,8 @@ class TestSchedulerHiCacheEvents(unittest.TestCase):
         s = self.scheduler
         s.init_pp_loop_state = Mock()
         s.pp_loop_size = 1
-        s.pause_state = PauseState()
+        s._engine_paused = False
+        s._deferred_input_requests = []
         s.mbs = [None]
         enter_scope(self, published_topology(pp_size=2))
         s.pp_group = SimpleNamespace(is_last_rank=True)
@@ -115,9 +113,8 @@ class TestSchedulerHiCacheEvents(unittest.TestCase):
         s.last_mbs = [None]
         s.ingest_requests = Mock(return_value=[])
         s.waiting_queue = IndexedReqList(ListKind.WAITING)
-        s.disagg_prefill_bootstrap_queue = SimpleNamespace(
-            move_bootstrapped=lambda dst: []
-        )
+        s.disagg_prefill_bootstrap_queue = SimpleNamespace(pop_bootstrapped=lambda: [])
+        s._pp_pd_get_prefill_transferred_ids = Mock(return_value=[])
         s._pp_commit_comm_work = Mock()
         s.get_new_batch_prefill = self.calls.admit
         # Stop the infinite loop at admission; no PP transport or GPU is needed.

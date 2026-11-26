@@ -238,10 +238,9 @@ if _is_hip:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         M, N = x.shape
         x_fp4 = torch.empty((M, N // 2), dtype=torch.uint8, device=x.device)
-        # Match aiter's column-major scale (a transposed (N/32, M) buffer).
         blockscale = torch.empty(
-            ((N + 31) // 32, M), dtype=torch.uint8, device=x.device
-        ).T
+            (M, (N + 31) // 32), dtype=torch.uint8, device=x.device
+        )
         return x_fp4, blockscale
 
     direct_register_custom_op(

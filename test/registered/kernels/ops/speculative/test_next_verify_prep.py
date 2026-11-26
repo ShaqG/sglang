@@ -88,9 +88,7 @@ def test_spec_mrope_positions_graph(dtype, mixed):
         multimodal_inputs=mm_inputs, spec_info=SimpleNamespace(positions=positions)
     )
     runner = SimpleNamespace(device="cuda")
-    output = SimpleNamespace(
-        seq_lens=torch.ones(3, device="cuda"), ragged_verify_layout=None
-    )
+    output = SimpleNamespace(seq_lens=torch.ones(3, device="cuda"))
     ForwardBatch.compute_spec_mrope_positions(output, runner, batch)
     graph = torch.cuda.CUDAGraph()
     if not mixed:

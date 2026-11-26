@@ -51,6 +51,7 @@ PYTHON_ONLY_REQUEST_FIELDS = frozenset(
     {
         "background",
         "conversation_id",
+        "data_parallel_rank",
         "encoder_urls",
         "external_trace_header",
         "http_worker_ipc",
@@ -62,7 +63,6 @@ PYTHON_ONLY_REQUEST_FIELDS = frozenset(
         "min_dynamic_patch",
         "mm_content_hashes",
         "mm_processor_kwargs",
-        "mm_routing_labels",
         "multi_item_delimiter_indices",
         "need_wait_for_mm_inputs",
         "no_logs",
@@ -74,12 +74,9 @@ PYTHON_ONLY_REQUEST_FIELDS = frozenset(
         "return_flat_raw_output_top_logprobs",
         "return_flat_raw_top_logprobs",
         "return_flat_raw_top_logprobs_b64",
-        "return_flat_raw_sampling_mask",
-        "return_flat_raw_sampling_mask_b64",
         "return_indexer_topk",
         "return_routed_experts",
         "sampling_logprobs_mode",
-        "token_ids_logprob_rows",
         "token_indices_to_pool",
         "use_audio_in_video",
         "video_config",
@@ -111,18 +108,6 @@ def load_fixtures():
         return json.load(f)["cases"]
 
 
-def codec(type_name):
-    """The (decode, encode) pair of a generated type: methods on a struct
-    class, module functions for a union alias (tagged, untagged, list)."""
-    generated = getattr(api_types, type_name)
-    if hasattr(generated, "from_json_value"):
-        return generated.from_json_value, lambda value: value.to_json_value()
-    return (
-        getattr(api_types, f"decode_{type_name}"),
-        getattr(api_types, f"encode_{type_name}"),
-    )
-
-
 # Schema-only sampling inputs the Rust server lowers before the scheduler
 # (choice -> regex); Python's SamplingParams never receives them.
 SCHEMA_ONLY_SAMPLING_FIELDS = frozenset({"choice"})
@@ -137,11 +122,11 @@ class TestCrossLanguageFixtures(CustomTestCase):
         self.assertTrue(cases)
         for case in cases:
             with self.subTest(case=f"{case['type']}: {case['name']}"):
-                decode, encode = codec(case["type"])
-                decoded = decode(case["input"])
-                self.assertEqual(compact(encode(decoded)), case["canonical"])
-                again = decode(json.loads(case["canonical"]))
-                self.assertEqual(compact(encode(again)), case["canonical"])
+                cls = getattr(api_types, case["type"])
+                decoded = cls.from_json_value(case["input"])
+                self.assertEqual(compact(decoded.to_json_value()), case["canonical"])
+                again = cls.from_json_value(json.loads(case["canonical"]))
+                self.assertEqual(compact(again.to_json_value()), case["canonical"])
 
     def test_every_fixture_type_is_a_generated_struct(self):
         """A fixture naming a type the Python module lacks would be skipped
@@ -254,7 +239,6 @@ class TestResponseParity(CustomTestCase):
                 "spec_accept_rate": 0.5,
                 "cached_tokens_details": {"device": 1, "host": 0},
                 "e2e_latency": 0.25,
-                "dp_rank": None,
             },
         }
         frame = GenerateResponse.from_json_value(python_frame)
@@ -271,7 +255,6 @@ class TestResponseParity(CustomTestCase):
                 "reasoning_tokens",
                 "weight_version",
                 "cached_tokens_details",
-                "dp_rank",
             ],
         )
         self.assertEqual(
@@ -314,7 +297,6 @@ class TestResponseParity(CustomTestCase):
                 "audio_tokens",
                 "video_tokens",
                 "cached_tokens_details",
-                "dp_rank",
             ],
         )
 

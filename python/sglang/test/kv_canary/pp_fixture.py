@@ -17,8 +17,7 @@ class CanaryPPFixture(CanaryE2EBase):
         cls.extra_server_args = (
             "--pp-size",
             str(PP_SIZE),
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             *SWA_POOL_SERVER_ARGS,
             *cls.extra_server_args,
         )

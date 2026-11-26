@@ -19,7 +19,6 @@
 #include <sgl_kernel/tensor.h>  // For TensorMatcher, SymbolicSize, SymbolicDevice
 #include <sgl_kernel/utils.h>   // For RuntimeCheck
 
-#include <sgl_kernel/activation.cuh>
 #include <sgl_kernel/type.cuh>   // For bf16_t, fp32_t, device::cast
 #include <sgl_kernel/utils.cuh>  // For LaunchKernel
 #include <sgl_kernel/warp.cuh>
@@ -108,13 +107,14 @@ __launch_bounds__(kWarps * 32) void kda_packed_decode_kernel(const KdaPackedDeco
     const float x = cast<fp32_t>(params.a[n * params.stride_a + hv * K + e0 + e]) + params.dt_bias[hv * K + e0 + e];
     float g;
     if (params.use_lower_bound) {
-      g = params.lower_bound * activation::sigmoid(exp_A * x);
+      g = params.lower_bound / (1.0f + expf(-exp_A * x));
     } else {
-      g = -exp_A * activation::softplus(x);
+      const float sp = (x <= 20.0f) ? logf(1.0f + expf(x)) : x;
+      g = -exp_A * sp;
     }
     decay[e] = expf(g);
   }
-  const float beta = activation::sigmoid(cast<fp32_t>(params.b[n * params.stride_b + hv]));
+  const float beta = 1.0f / (1.0f + expf(-cast<fp32_t>(params.b[n * params.stride_b + hv])));
 
   const bf16_t* v_ptr = mixed + 2 * params.H * K + hv * V;
   fp32_t* h_base = params.state + sidx * params.stride_state + static_cast<int64_t>(hv) * V * K;

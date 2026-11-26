@@ -95,6 +95,20 @@ pub(crate) fn render(
     if thinking && !supported(&thinking_effort) {
         return Err(format!("unsupported thinking_effort {thinking_effort}").into());
     }
+    // Dynamo drops whitespace-only reasoning, which SGLang renders.
+    if thinking
+        && messages.iter().any(|m| {
+            m["role"] == "assistant"
+                && m["reasoning_content"]
+                    .as_str()
+                    .is_some_and(|r| !r.is_empty() && r.trim().is_empty())
+        })
+    {
+        return Err(RenderError::Declined(
+            "whitespace-only Kimi K3 reasoning".into(),
+        ));
+    }
+
     let tools = match request["tools"].as_array() {
         Some(tools) if !tools.is_empty() => {
             Some(tools.iter().map(tool_dump).collect::<Result<Value, _>>()?)
@@ -111,15 +125,7 @@ pub(crate) fn render(
     {
         return Err("tool_choice required needs tools".into());
     }
-    // The encoder renders tool_choice="none" with or without tools, so a
-    // client's explicit "none" reaches it either way. The "none" SGLang fills
-    // in for a request without tools is never in the body, so it does not.
-    let passes_tool_choice = match request["tool_choice"].as_str() {
-        Some("required") => has_tools,
-        Some("none") => true,
-        _ => false,
-    };
-    if passes_tool_choice {
+    if has_tools && matches!(request["tool_choice"].as_str(), Some("required" | "none")) {
         kwargs
             .entry("tool_choice")
             .or_insert_with(|| request["tool_choice"].clone());
@@ -279,9 +285,12 @@ fn tool_dump(tool: &Value) -> Result<Value, String> {
         dump.insert("type".into(), kind.clone());
     }
     dump.insert("function".into(), function.into());
-    // `Tool._serialize` drops an unset `defer_loading`, null included.
-    if let Some(defer) = tool.get("defer_loading").filter(|v| !v.is_null()) {
-        dump.insert("defer_loading".into(), pydantic_bool(defer)?.into());
+    if let Some(defer) = tool.get("defer_loading") {
+        let defer = match defer {
+            Value::Null => Value::Null,
+            defer => pydantic_bool(defer)?.into(),
+        };
+        dump.insert("defer_loading".into(), defer);
     }
     Ok(dump.into())
 }

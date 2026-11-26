@@ -22,6 +22,11 @@ class AITERSageBackend(AttentionBackend):
         return AITERSageImpl
 
     @staticmethod
+    def get_metadata_cls() -> type["AttentionMetadata"]:
+        # AITER Sage backend does not require special metadata.
+        return AttentionMetadata
+
+    @staticmethod
     def get_builder_cls() -> type["AttentionMetadataBuilder"]:
         raise NotImplementedError(
             "AITER Sage backend does not have a metadata builder."

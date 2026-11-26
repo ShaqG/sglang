@@ -112,15 +112,13 @@ def _make_prealloc_queue(
     )
     # Disable the SWA-tail branch; this test only exercises the pool-length gate.
     queue._uses_swa_tail_prealloc = MagicMock(return_value=False)
-    # A request table without state slots: the ceiling prices tokens alone.
-    queue.req_to_token_pool = SimpleNamespace(holds_state_slots=False)
 
     model_runner = SimpleNamespace(max_token_pool_size=max_token_pool_size)
     tp_worker = SimpleNamespace(model_runner=model_runner)
     queue.scheduler = SimpleNamespace(
         enable_hisparse=enable_hisparse,
         tp_worker=tp_worker,
-        request_retirer=SimpleNamespace(retire_unadmitted=MagicMock()),
+        output_streamer=MagicMock(),
     )
     return queue
 
@@ -156,7 +154,7 @@ class TestCheckIfReqExceedKvCapacity(CustomTestCase):
         req = _make_req("hisparse-long", prompt_len=2048)
 
         self.assertFalse(queue._check_if_req_exceed_kv_capacity(req))
-        queue.scheduler.request_retirer.retire_unadmitted.assert_not_called()
+        queue.scheduler.output_streamer.stream_output.assert_not_called()
 
     def test_hisparse_rejects_beyond_host_backed_size(self):
         """Requests longer than host-backed capacity are still aborted."""
@@ -168,7 +166,9 @@ class TestCheckIfReqExceedKvCapacity(CustomTestCase):
         req = _make_req("hisparse-too-long", prompt_len=5000)
 
         self.assertTrue(queue._check_if_req_exceed_kv_capacity(req))
-        queue.scheduler.request_retirer.retire_unadmitted.assert_called_once_with(req)
+        queue.scheduler.output_streamer.stream_output.assert_called_once_with(
+            [req], req.return_logprob
+        )
         # prepare_abort sets finished_reason to a BAD_REQUEST FINISH_ABORT.
         self.assertIsNotNone(req.finished_reason)
 
@@ -183,7 +183,9 @@ class TestCheckIfReqExceedKvCapacity(CustomTestCase):
         req = _make_req("non-hisparse-too-long", prompt_len=2048)
 
         self.assertTrue(queue._check_if_req_exceed_kv_capacity(req))
-        queue.scheduler.request_retirer.retire_unadmitted.assert_called_once_with(req)
+        queue.scheduler.output_streamer.stream_output.assert_called_once_with(
+            [req], req.return_logprob
+        )
 
     def test_rebootstrap_input_len_used_for_capacity(self):
         """Rebootstrap requests carry both prompt and emitted output_ids; the

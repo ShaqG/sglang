@@ -184,10 +184,6 @@ class DisaggregationMetrics(msgspec.Struct, array_like=True):
     decode_retracted_queue_reqs: int = 0
     kv_transfer_speed_gb_s: float = 0.0
     kv_transfer_latency_ms: float = 0.0
-    # 1 while a full host staging pool holds back ready decode prealloc requests;
-    # host-staged transfers whose KV landed but wait for device admission.
-    decode_host_pool_blocked: int = 0
-    decode_host_staged_landed_reqs: int = 0
 
 
 class QueueMetrics(msgspec.Struct, array_like=True):
@@ -354,7 +350,7 @@ class ShmLoadSnapshotWriter:
                 HEADER_STRUCT.pack_into(
                     self.mmap, 0, MAGIC, VERSION, dp_size, self.slot_size
                 )
-                self._copy_payload(self._encode_payload(LoadSnapshot(dp_rank=dp_rank)))
+                self._write_payload(LoadSnapshot(dp_rank=dp_rank))
         except Exception:
             if self.fd >= 0:
                 os.close(self.fd)
@@ -366,12 +362,10 @@ class ShmLoadSnapshotWriter:
                 f"snapshot dp_rank={snapshot.dp_rank} does not match writer dp_rank={self.dp_rank}"
             )
 
-        # Encode before taking the lock so readers wait only for the copy.
-        payload = self._encode_payload(snapshot)
         with file_lock(self.fd, fcntl.LOCK_EX):
-            self._copy_payload(payload)
+            self._write_payload(snapshot)
 
-    def _encode_payload(self, snapshot: LoadSnapshot) -> bytes:
+    def _write_payload(self, snapshot: LoadSnapshot) -> None:
         payload = snapshot_encoder.encode(snapshot)
         max_payload_size = self.slot_size - SLOT_LEN_STRUCT.size
         if len(payload) > max_payload_size:
@@ -379,9 +373,7 @@ class ShmLoadSnapshotWriter:
                 f"load snapshot payload size {len(payload)} exceeds slot payload "
                 f"capacity {max_payload_size}"
             )
-        return payload
 
-    def _copy_payload(self, payload: bytes) -> None:
         offset = slot_offset(self.dp_rank, self.slot_size)
         payload_start = offset + SLOT_LEN_STRUCT.size
         payload_end = payload_start + len(payload)

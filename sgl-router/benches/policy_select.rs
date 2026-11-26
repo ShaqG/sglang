@@ -3,7 +3,8 @@
 
 //! Policy-selection throughput microbench.
 //!
-//! Measures how fast the routing layer returns a worker for a given
+//! Mirrors `sgl-model-gateway/benches/manual_policy_benchmark.rs` —
+//! measures how fast the routing layer returns a worker for a given
 //! request context, across round-robin, random, and power-of-two choices.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};

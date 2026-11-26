@@ -40,8 +40,7 @@ class TestTwoBatchOverlap(unittest.TestCase):
                     "deepep",
                     "--deepep-mode",
                     "normal",
-                    "--disable-decode-cuda-graph",
-                    "--disable-prefill-cuda-graph",  # DeepEP normal does not support CUDA Graph
+                    "--disable-cuda-graph",  # DeepEP normal does not support CUDA Graph
                     "--enable-two-batch-overlap",
                 ],
             )
@@ -141,8 +140,7 @@ class TestQwen3TwoBatchOverlap(TestTwoBatchOverlap):
                     "deepep",
                     "--deepep-mode",
                     "normal",
-                    "--disable-decode-cuda-graph",
-                    "--disable-prefill-cuda-graph",  # DeepEP normal does not support CUDA Graph
+                    "--disable-cuda-graph",  # DeepEP normal does not support CUDA Graph
                     "--enable-two-batch-overlap",
                 ],
             )

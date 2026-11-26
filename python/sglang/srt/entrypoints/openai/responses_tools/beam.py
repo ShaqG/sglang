@@ -3,23 +3,15 @@
 namespaced tools under joined names, and shell as Beam's trained bash."""
 
 import json
-from functools import cache
 from typing import Union
 
+from openai.types.responses import ResponseFunctionShellToolCall
+from openai.types.responses.response_input_item_param import ShellCall, ShellCallOutput
 from pydantic import BaseModel, TypeAdapter
 
 from sglang.srt.entrypoints.openai.responses_adapters import response_tool_name
 
-
-@cache
-def _shell_input_adapter():
-    # Older SDKs can serve Responses requests without shell tools.
-    from openai.types.responses.response_input_item_param import (
-        ShellCall,
-        ShellCallOutput,
-    )
-
-    return TypeAdapter(Union[ShellCall, ShellCallOutput])
+_SHELL_INPUT = TypeAdapter(Union[ShellCall, ShellCallOutput])
 
 
 class ResponseToolChoiceError(ValueError):
@@ -219,7 +211,7 @@ class BeamToolAdapter:
             if "bash" in self.names and self.builtins.get("bash") != "shell":
                 raise ValueError("Shell replay conflicts with a user-defined bash tool")
         if item.get("type") == "shell_call":
-            call = _shell_input_adapter().validate_python(item)
+            call = _SHELL_INPUT.validate_python(item)
             self._options(
                 item["action"], {"commands", "timeout_ms", "max_output_length"}
             )
@@ -244,13 +236,12 @@ class BeamToolAdapter:
                 "status": call.get("status") or "completed",
             }
         if item.get("type") == "shell_call_output":
-            shell_input = _shell_input_adapter()
-            output = shell_input.validate_python(item)
+            output = _SHELL_INPUT.validate_python(item)
             output["output"] = list(output["output"])
             return {
                 "type": "function_call_output",
                 "call_id": output["call_id"],
-                "output": shell_input.dump_json(output, exclude_none=True).decode(),
+                "output": _SHELL_INPUT.dump_json(output, exclude_none=True).decode(),
             }
         return flatten_response_input(item)
 
@@ -268,8 +259,6 @@ class BeamToolAdapter:
 
     @staticmethod
     def _shell_call(item):
-        from openai.types.responses import ResponseFunctionShellToolCall
-
         try:
             args = json.loads(item.get("arguments") or "{}")
         except ValueError:

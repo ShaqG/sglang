@@ -6,19 +6,13 @@ import torch
 import triton
 import triton.language as tl
 
-from sglang.kernels.ops.attention.dsa.kpool_metadata.scan import (
-    _MIN_BLOCK_BS,
-    _MIN_BLOCK_EXPANDED,
-    _metadata_block,
-    bounded_scan_num_splits,
-)
+from sglang.kernels.ops.attention.dsa.kpool_metadata.scan import bounded_scan_num_splits
 
 
 @triton.jit(
     do_not_specialize=[
         "page_table_stride_0",
         "real_page_table_stride_0",
-        "bs",
         "max_seqlen_k",
         "num_splits",
     ]
@@ -45,7 +39,7 @@ def _fused_dsa_target_verify_metadata_kpool_kernel(
     real_page_table_stride_1: tl.constexpr,
     paged_mqa_ctx_lens_stride_0: tl.constexpr,
     paged_mqa_ctx_lens_stride_1: tl.constexpr,
-    bs,
+    bs: tl.constexpr,
     max_seqlen_k,
     num_splits,
     dsa_index_topk: tl.constexpr,
@@ -60,7 +54,7 @@ def _fused_dsa_target_verify_metadata_kpool_kernel(
     BLOCK_N: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    expanded_size = bs * next_n
+    expanded_size: tl.constexpr = bs * next_n
 
     if pid == 0:
         offs_b = tl.arange(0, BLOCK_BS)
@@ -223,8 +217,8 @@ def _prep_fused_dsa_target_verify_metadata_kpool_launch(
         paged_mqa_ctx_lens_2d = page_table_1
 
     expanded_size = bs * next_n
-    block_bs = _metadata_block(bs, _MIN_BLOCK_BS)
-    block_expanded = _metadata_block(expanded_size, _MIN_BLOCK_EXPANDED)
+    block_bs = triton.next_power_of_2(bs)
+    block_expanded = triton.next_power_of_2(expanded_size)
     block_n = 128
     num_col_blocks = triton.cdiv(max_seqlen_k, block_n)
     num_splits = bounded_scan_num_splits(expanded_size, num_col_blocks)

@@ -69,6 +69,7 @@ class MusaPlatformBase(Platform):
     device_name: str = "musa"
     device_type: str = "musa"
     dispatch_key: str = "MUSA"
+    device_control_env_var: str = "MUSA_VISIBLE_DEVICES"
 
     @classmethod
     @lru_cache(maxsize=1)

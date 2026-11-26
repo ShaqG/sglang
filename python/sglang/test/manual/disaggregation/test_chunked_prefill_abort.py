@@ -55,8 +55,7 @@ class TestChunkedPrefillAbortE2E(CustomTestCase):
             cls.base_url,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=[
-                "--disable-decode-cuda-graph",
-                "--disable-prefill-cuda-graph",
+                "--disable-cuda-graph",
                 "--chunked-prefill-size",
                 str(CHUNKED_PREFILL_SIZE),
                 "--max-running-requests",

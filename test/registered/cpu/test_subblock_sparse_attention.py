@@ -54,7 +54,7 @@ from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(
     est_time=9,
-    suite="extra-test-cpu-intel",
+    suite="stage-a-test-cpu-intel",
 )
 
 

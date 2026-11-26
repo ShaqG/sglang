@@ -120,7 +120,8 @@ export const DeepSeekR1BasicDeployment = () => {
         command += ' \\\n  --attn-dp-size 8';
       }
       else {
-        command += ' \\\n  --attn-dp-size 6';
+        command += ' \\\n  --dp 6';
+        command += ' \\\n  --enable-dp-attention';
       }
     }
     if (strategyValues.includes('ep')) {

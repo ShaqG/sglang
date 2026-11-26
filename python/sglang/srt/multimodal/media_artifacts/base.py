@@ -41,7 +41,7 @@ from sglang.srt.multimodal.cache import (
     parse_content_hash,
     snapshot_media,
 )
-from sglang.srt.multimodal.media_io import CLIENT_MEDIA_EXCEPTIONS, load_image
+from sglang.srt.multimodal.media_io import load_image
 from sglang.srt.multimodal.modality import Modality
 
 
@@ -118,7 +118,7 @@ class MediaArtifactCacheMixin:
     def _resolve_artifact_modality(self, modality: Optional[Modality]) -> Modality:
         modality = modality or self.artifact_modality
         if modality is None:
-            raise RuntimeError("A modality is required for artifact caching")
+            raise ValueError("A modality is required for artifact caching")
         return modality
 
     def _artifact_key(
@@ -157,12 +157,9 @@ class MediaArtifactCacheMixin:
         if isinstance(data, Image.Image):
             data.load()
             return data
-        try:
-            image, _ = load_image(data, self.gpu_image_decode)
-            if isinstance(image, Image.Image):
-                image.load()
-        except CLIENT_MEDIA_EXCEPTIONS as e:
-            raise ValueError(f"Could not load image: {e}") from e
+        image, _ = load_image(data, self.gpu_image_decode)
+        if isinstance(image, Image.Image):
+            image.load()
         return image
 
     def snapshot_media_source(self, source: Any, modality: Modality) -> MediaSnapshot:
@@ -205,17 +202,15 @@ class MediaArtifactCacheMixin:
     def validate_artifact(artifact: MediaArtifact, entry: MediaArtifactInput) -> None:
         """Enforce identity invariants shared by every model adapter."""
         if artifact.content_digest != entry.content_digest:
-            raise RuntimeError(
-                "prepare_artifact_batch changed the media content digest"
-            )
+            raise ValueError("prepare_artifact_batch changed the media content digest")
         if artifact.artifact_key != entry.artifact_key:
-            raise RuntimeError("prepare_artifact_batch changed the media artifact key")
+            raise ValueError("prepare_artifact_batch changed the media artifact key")
         if (
             isinstance(artifact.feature_hash, bool)
             or not isinstance(artifact.feature_hash, int)
             or artifact.feature_hash < 0
         ):
-            raise RuntimeError(
+            raise ValueError(
                 "Media artifact feature_hash must be a non-negative integer"
             )
 
@@ -296,7 +291,7 @@ class MediaArtifactCacheMixin:
         if featureless_hit_mask is None:
             featureless_hit_mask = [False] * media_count
         if len(featureless_hit_mask) != media_count:
-            raise RuntimeError("featureless_hit_mask must align with media_data")
+            raise ValueError("featureless_hit_mask must align with media_data")
 
         # keep per-input state aligned for duplicates and partial hits
         artifacts: list[Optional[MediaArtifact]] = [None] * media_count
@@ -470,7 +465,7 @@ class MediaArtifactCacheMixin:
 
         artifacts = await self._run_preprocess_and_build_artifact_batch(entries)
         if len(artifacts) != len(entries):
-            raise RuntimeError(
+            raise ValueError(
                 "prepare_artifact_batch must return one artifact per media input"
             )
         for artifact, entry in zip(artifacts, entries):
@@ -518,7 +513,7 @@ class MediaArtifactCacheMixin:
                 missed_media
             )
             if len(missed_artifacts) != len(misses_to_compute):
-                raise RuntimeError(
+                raise ValueError(
                     "prepare_artifact_batch must return one artifact per cache miss"
                 )
             for missed, entry, artifact in zip(
@@ -530,7 +525,7 @@ class MediaArtifactCacheMixin:
                     previous is not None
                     and previous.feature_hash != artifact.feature_hash
                 ):
-                    raise RuntimeError(
+                    raise ValueError(
                         "Cached media artifact feature hash changed for identical "
                         f"identity {missed.key}"
                     )

@@ -14,7 +14,7 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_npu_ci(est_time=400, suite="full-test-1-npu-a3", nightly=True)
+register_npu_ci(est_time=400, suite="full-1-npu-a3", nightly=True)
 
 
 class TestNpuReturnInputIds(CustomTestCase):
@@ -34,8 +34,7 @@ class TestNpuReturnInputIds(CustomTestCase):
         other_args = [
             "--attention-backend",
             "ascend",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--return-input-ids",
         ]
         cls.process = popen_launch_server(

@@ -30,11 +30,7 @@ from sglang.srt.distributed.device_communicators.pynccl_allocator import (
 )
 from sglang.srt.layers.dp_attention import is_allocation_symmetric
 from sglang.srt.layers.moe.moe_runner import MoeRunnerConfig
-from sglang.srt.layers.moe.utils import (
-    get_moe_padding_size,
-    get_moe_runner_backend,
-    route_dropped_experts_to_local,
-)
+from sglang.srt.layers.moe.utils import get_moe_padding_size, get_moe_runner_backend
 from sglang.srt.runtime_context import get_exec, get_parallel
 from sglang.srt.utils import (
     cpu_has_amx_support,
@@ -43,9 +39,12 @@ from sglang.srt.utils import (
     is_cuda,
     is_hip,
     is_musa,
+    is_npu,
     is_xpu,
 )
 from sglang.srt.utils.custom_op import register_custom_op
+
+_is_npu = is_npu()
 
 from .fused_moe_triton_config import get_config_dtype_str, try_get_optimal_moe_config
 from .moe_align_block_size import moe_align_block_size
@@ -199,7 +198,6 @@ def inplace_fused_experts(
     gate_up_interleaved: bool = True,
     a1_q: Optional[torch.Tensor] = None,
     fuse_swiglu_interleaved: bool = False,
-    w2_block_shape: Optional[List[int]] = None,
 ) -> None:
     fused_experts_impl(
         hidden_states,
@@ -234,7 +232,6 @@ def inplace_fused_experts(
         gate_up_interleaved=gate_up_interleaved,
         a1_q=a1_q,
         fuse_swiglu_interleaved=fuse_swiglu_interleaved,
-        w2_block_shape=w2_block_shape,
     )
 
 
@@ -272,7 +269,6 @@ def outplace_fused_experts(
     a1_q: Optional[torch.Tensor] = None,
     fuse_swiglu_interleaved: bool = False,
     no_combine_keep_router_weight: bool = False,
-    w2_block_shape: Optional[List[int]] = None,
 ) -> torch.Tensor:
     return fused_experts_impl(
         hidden_states,
@@ -308,7 +304,6 @@ def outplace_fused_experts(
         a1_q=a1_q,
         fuse_swiglu_interleaved=fuse_swiglu_interleaved,
         no_combine_keep_router_weight=no_combine_keep_router_weight,
-        w2_block_shape=w2_block_shape,
     )
 
 
@@ -334,7 +329,6 @@ def fused_experts(
     block_shape: Optional[List[int]] = None,
     a1_q: Optional[torch.Tensor] = None,
     fuse_swiglu_interleaved: bool = False,
-    w2_block_shape: Optional[List[int]] = None,
 ):
     topk_weights, topk_ids, _ = topk_output
     filter_expert = (
@@ -374,7 +368,6 @@ def fused_experts(
             gate_up_interleaved=moe_runner_config.gate_up_interleaved,
             a1_q=a1_q,
             fuse_swiglu_interleaved=fuse_swiglu_interleaved,
-            w2_block_shape=w2_block_shape,
         )
         return hidden_states
     else:
@@ -411,17 +404,16 @@ def fused_experts(
             a1_q=a1_q,
             fuse_swiglu_interleaved=fuse_swiglu_interleaved,
             no_combine_keep_router_weight=moe_runner_config.no_combine_keep_router_weight,
-            w2_block_shape=w2_block_shape,
         )
 
 
-@torch.compile
+@torch.compile(disable=_is_npu)
 def moe_sum_reduce_torch_compile(x, out, routed_scaling_factor):
     torch.sum(x, dim=1, out=out)
     out.mul_(routed_scaling_factor)
 
 
-@torch.compile
+@torch.compile(disable=_is_npu)
 def _swiglu_silu_clamp_mul(x, gemm1_limit):
     gate, up = x.chunk(2, dim=-1)
     gate = F.silu(gate)
@@ -430,7 +422,7 @@ def _swiglu_silu_clamp_mul(x, gemm1_limit):
     return gate * up
 
 
-@torch.compile
+@torch.compile(disable=_is_npu)
 def swiglu_gpt_oss_sigmoid_alpha(x, gemm1_alpha, gemm1_limit):
     # NOTE: This variant uses gemm1_alpha, unlike _swiglu_silu_clamp_mul.
     # At present, only GPT-OSS uses this variant.
@@ -440,7 +432,7 @@ def swiglu_gpt_oss_sigmoid_alpha(x, gemm1_alpha, gemm1_limit):
     return gate * torch.sigmoid(gate * gemm1_alpha) * (up + 1)
 
 
-@torch.compile
+@torch.compile(disable=_is_npu)
 def swiglu_no_interleaved_with_alpha_and_limit(x, gemm1_alpha, gemm1_limit):
     gate, up = x.chunk(2, dim=-1)
     gate = gate.clamp(min=None, max=gemm1_limit)
@@ -465,7 +457,6 @@ def _prepare_fused_moe_run(
     use_int4_w4a16: bool,
     per_channel_quant: bool,
     block_shape: Optional[List[int]],
-    w2_block_shape: Optional[List[int]] = None,
 ):
     """Resolve config, down_config, TMA flag, and aligned expert routing ids.
 
@@ -514,13 +505,6 @@ def _prepare_fused_moe_run(
         logger.warning_once(
             "Up MoE TMA is enabled (USE_TMA=true in the up-projection config). "
             "This requires a config produced by the updated tuning script. "
-        )
-    if w2_block_shape is not None:
-        # The kernel applies one scale per K tile, so the down GEMM's tile must
-        # not span w2's finer K blocks.
-        down_config = dict(down_config or config)
-        down_config["BLOCK_SIZE_K"] = min(
-            down_config["BLOCK_SIZE_K"], w2_block_shape[1]
         )
     down_tma_requested = down_config is not None and down_config.pop("USE_TMA", False)
     down_moe_use_tma = _moe_support_tma() and down_tma_requested
@@ -588,7 +572,6 @@ def _fused_moe_kernel_sequence(
     fuse_swiglu_interleaved: bool = False,
     defer_sum: bool = False,
     no_combine_keep_router_weight: bool = False,
-    w2_block_shape: Optional[List[int]] = None,
 ) -> torch.Tensor:
     """Run the MoE kernel/activation/kernel/combine sequence in a single shot.
 
@@ -953,20 +936,19 @@ def _fused_moe_kernel_sequence(
         out_slice = out_hidden_states
         out_slice.zero_()
 
-    down_block_shape = w2_block_shape or block_shape
     if (
         _is_cuda
         and down_moe_use_tma
         and use_fp8_w8a8
-        and down_block_shape is not None
+        and block_shape is not None
         and a2_scale is None
-        and intermediate_cache2.shape[-1] != down_block_shape[1]
+        and intermediate_cache2.shape[-1] != block_shape[1]
     ):
         # Same quant the down call would run, restricted to the rows the down
         # GEMM reads; a single whole-row group keeps that call's per-token kernel.
         intermediate_cache2, a2_scale = per_token_group_quant(
             intermediate_cache2,
-            group_size=down_block_shape[1],
+            group_size=block_shape[1],
             sorted_token_ids=sorted_token_ids,
             num_tokens_post_padded=num_tokens_post_padded,
             num_valid_tokens=topk_ids.numel(),
@@ -1003,7 +985,7 @@ def _fused_moe_kernel_sequence(
         use_int8_w8a16=use_int8_w8a16,
         use_int4_w4a16=use_int4_w4a16,
         per_channel_quant=per_channel_quant,
-        block_shape=down_block_shape,
+        block_shape=block_shape,
         a_use_tma=down_moe_use_tma,
         b_use_tma=down_moe_use_tma,
         filter_expert=filter_expert,
@@ -1171,7 +1153,6 @@ def fused_experts_impl(
     fuse_swiglu_interleaved: bool = False,
     defer_sum: bool = False,
     no_combine_keep_router_weight: bool = False,
-    w2_block_shape: Optional[List[int]] = None,
 ):
     padded_size = padding_size
     if not (use_fp8_w8a8 or use_int8_w8a8) or block_shape is not None or _use_aiter:
@@ -1209,7 +1190,6 @@ def fused_experts_impl(
         use_int4_w4a16=use_int4_w4a16,
         per_channel_quant=per_channel_quant,
         block_shape=block_shape,
-        w2_block_shape=w2_block_shape,
     )
 
     return _fused_moe_kernel_sequence(
@@ -1255,7 +1235,6 @@ def fused_experts_impl(
         fuse_swiglu_interleaved=fuse_swiglu_interleaved,
         defer_sum=defer_sum,
         no_combine_keep_router_weight=no_combine_keep_router_weight,
-        w2_block_shape=w2_block_shape,
     )
 
 
@@ -1321,9 +1300,6 @@ def fused_moe(
     """
     if _is_xpu and not get_moe_runner_backend().is_triton():
         topk_weight, topk_ids, _ = topk_output
-        topk_weight, topk_ids = route_dropped_experts_to_local(
-            topk_weights=topk_weight, topk_ids=topk_ids
-        )
         from sgl_kernel import fused_experts as sgl_fused_experts
 
         return sgl_fused_experts(

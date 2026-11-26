@@ -54,12 +54,9 @@ def _kvc():
         layer_info=types.SimpleNamespace(
             start_layer=0, end_layer=NUM_LAYERS, num_effective_layers=NUM_LAYERS
         ),
-        server_args=types.SimpleNamespace(
-            enable_hisparse=False, indexer_kv_cache_dtype=None
-        ),
+        server_args=types.SimpleNamespace(enable_hisparse=False),
         mambaish_config=None,
         is_draft_worker=False,
-        use_combined_kv_buffer=False,
         kv_cache_dtype=torch.bfloat16,
         device="cpu",
     )
@@ -80,10 +77,7 @@ class TestNpuIndexKElision(CustomTestCase):
             "sglang.srt.hardware_backend.npu.memory_pool_npu.NPUMLATokenToKVPool"
         ) as pool_cls:
             KVCacheConfigurator._build_ascend_mla_kv_pool(
-                kvc,
-                max_total_num_tokens=1024,
-                max_running_requests=4,
-                is_dsa_model=True,
+                kvc, max_total_num_tokens=1024, is_dsa_model=True
             )
         self.assertEqual(pool_cls.call_args.kwargs["indexer_layer_ids"], INDEXER_LAYERS)
 

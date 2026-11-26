@@ -37,7 +37,7 @@ $ python3 -m sglang.benchmark.one_batch --correct \
   --model meta-llama/Meta-Llama-3-8B \
   --json-model-override-args '{"architectures": ["TorchNativeLlamaForCausalLM"]}' \
   --tensor-parallel-size 2 \
-  --disable-decode-cuda-graph --disable-prefill-cuda-graph
+  --disable-cuda-graph
 ```
 We will enable CUDA Graph support soon.
 """

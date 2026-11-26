@@ -11,21 +11,21 @@ use axum::{
 };
 use sglang_api_types::api::v1 as api;
 
-use super::auth::DeclaredRoute;
-use crate::api_server::handlers::{HiCacheError, HiCacheManager};
+use crate::api_server::core::CoreError;
+use crate::api_server::handlers::HiCacheManager;
 
 pub(super) fn routes(manager: Arc<HiCacheManager>) -> Router {
     Router::new()
-        .declared_route(
+        .route(
             "/hicache/storage-backend",
             get(status).put(attach).delete(detach),
         )
-        .declared_route("/hicache/storage-backend/clear", post(clear))
+        .route("/hicache/storage-backend/clear", post(clear))
         .with_state(manager)
 }
 
-async fn status(State(manager): State<Arc<HiCacheManager>>) -> Response {
-    Json(manager.status().await).into_response()
+async fn status(State(manager): State<Arc<HiCacheManager>>) -> Json<api::HiCacheStatus> {
+    Json(manager.status().await)
 }
 
 async fn attach(
@@ -51,10 +51,10 @@ async fn detach(State(manager): State<Arc<HiCacheManager>>) -> Response {
 }
 
 async fn clear(State(manager): State<Arc<HiCacheManager>>) -> Response {
-    storage_response(manager.clear().await.map_err(HiCacheError::from))
+    storage_response(manager.clear().await)
 }
 
-fn storage_response(result: Result<api::HiCacheStorageResponse, HiCacheError>) -> Response {
+fn storage_response(result: Result<api::HiCacheStorageResponse, CoreError>) -> Response {
     match result {
         Ok(output) => {
             let status = if output.success {
@@ -64,8 +64,7 @@ fn storage_response(result: Result<api::HiCacheStorageResponse, HiCacheError>) -
             };
             (status, Json(output)).into_response()
         }
-        Err(HiCacheError::AdminKeyMissing) => super::auth::admin_key_missing(),
-        Err(HiCacheError::Core(error)) => (error.http_status(), error.to_string()).into_response(),
+        Err(error) => (error.http_status(), error.to_string()).into_response(),
     }
 }
 
@@ -80,51 +79,12 @@ mod tests {
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
-    use crate::api_server::handlers::{ADMIN_KEY_MISSING, CoreConfig, CoreHandle};
-    use crate::message::{
-        config::{ApiKeys, ServerArgs},
-        request::RequestKind,
-        response::ResponseItem,
-    };
+    use crate::api_server::handlers::{CoreConfig, CoreHandle};
+    use crate::message::{config::ServerArgs, request::RequestKind, response::ResponseItem};
     use crate::tokenizer_manager::wiring::TmEvent;
 
-    fn admin_keys() -> ApiKeys {
-        ApiKeys::new(None, Some("sk-admin".into()))
-    }
-
     fn app() -> (Router, flume::Receiver<TmEvent>) {
-        app_with_args(ServerArgs {
-            api_keys: admin_keys(),
-            ..ServerArgs::default()
-        })
-    }
-
-    /// Python refuses the storage-backend status, attach and detach without
-    /// an admin key: 403 from the key check, before any handler.
-    #[tokio::test]
-    async fn storage_backend_needs_a_configured_admin_key() {
-        let (router, intake_rx) = app_with_args(ServerArgs::default());
-        let router = super::super::auth::apply(router, &ApiKeys::default());
-        for method in ["GET", "PUT", "DELETE"] {
-            let response = router
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(method)
-                        .uri("/hicache/storage-backend")
-                        .header("content-type", "application/json")
-                        .body(Body::from(r#"{"hicache_storage_backend": "file"}"#))
-                        .unwrap(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method}");
-            let body: Value =
-                serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap())
-                    .unwrap();
-            assert_eq!(body["error"], ADMIN_KEY_MISSING, "{method}");
-        }
-        assert!(intake_rx.is_empty(), "refused before the scheduler");
+        app_with_args(ServerArgs::default())
     }
 
     fn app_with_args(args: ServerArgs) -> (Router, flume::Receiver<TmEvent>) {
@@ -144,8 +104,6 @@ mod tests {
                 metadata: (&args).into(),
                 metrics: None,
                 request_log: None,
-                generate_validator: None,
-                abort_hook: None,
             },
         );
         (
@@ -483,7 +441,6 @@ mod tests {
             hicache_storage_backend_extra_config: Some("{}".into()),
             hicache_storage_prefetch_policy: Some("timeout".into()),
             hicache_write_policy: Some("write_through".into()),
-            api_keys: admin_keys(),
             ..ServerArgs::default()
         });
         let initial = json!({

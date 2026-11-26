@@ -15,8 +15,7 @@ from typing import Any, Iterable, Iterator, Optional
 import mlx.core as mx
 import torch
 
-from sglang.srt.mem_cache.base_prefix_cache import InsertResult
-from sglang.srt.mem_cache.kv.alloc.demand import KVDemand
+from sglang.srt.mem_cache.base_prefix_cache import EvictParams, InsertResult
 from sglang.srt.mem_cache.kv.state_storage import StateStorage
 from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.mem_cache.unified_cache.components.base import TreeComponent
@@ -96,11 +95,6 @@ class MlxAuxiliaryStatePool:
         self.device = device
         self.mamba_cache = None
         self.mem_usage = 0
-        # No speculative ReplaySSM cursors: `StateStorage.reset_request_rows`
-        # skips a pool whose cursors are None.
-        self.replayssm_spec_write_pos = None
-        self.replayssm_cache_base = None
-        self.replayssm_is_flush = None
         self._snapshots: dict[int, dict[int, _CacheSnapshot]] = {}
         self._alloc_iter: Optional[Iterator[torch.Tensor]] = None
         self.clear()
@@ -118,10 +112,6 @@ class MlxAuxiliaryStatePool:
 
     def schedulable_available_size(self) -> int:
         return self.available_size()
-
-    def slots_fit(self, count: int) -> bool:
-        """Whether ``count`` slots can be taken now."""
-        return self.schedulable_available_size() >= count
 
     def alloc_group_begin(self, num_reqs: int) -> None:
         self._alloc_iter = None
@@ -231,7 +221,7 @@ class MlxAuxiliaryStateStorage(StateStorage):
     them through the token allocator. The MLX table binds a request's slot when
     it binds the row, and release keeps the MLX table's rules."""
 
-    def acquire(self, table, reqs, rows) -> None:
+    def acquire(self, table, reqs, rows, fresh_rows) -> None:
         """Nothing left to bind: the MLX table's ``alloc`` gave each request
         its auxiliary slot, or kept the one it holds, with its row."""
 
@@ -387,7 +377,7 @@ class MlxAuxiliaryStateComponent(MambaComponent):
                 source_value
             )
             if forked_value is None:
-                self.cache.evict_for_alloc(KVDemand(state_slots=1))
+                self.cache.evict_for_alloc(EvictParams(num_tokens=0, mamba_num=1))
                 forked_value = (
                     self.cache.req_to_token_pool.auxiliary_state_pool.fork_from(
                         source_value

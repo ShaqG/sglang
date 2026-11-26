@@ -1,4 +1,5 @@
 import itertools
+import json
 import os
 import random
 import unittest
@@ -22,7 +23,7 @@ from sglang.test.test_utils import (
     popen_launch_pd_server,
 )
 
-register_npu_ci(est_time=600, suite="nightly-test-4-npu-a3", nightly=True)
+register_npu_ci(est_time=600, suite="nightly-4-npu-a3", nightly=True)
 
 load_balance_method_options = [
     "auto",
@@ -75,8 +76,7 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
             cls.prefill_load_balance_method,
             "--disaggregation-transfer-backend",
             "ascend",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--attention-backend",
             "ascend",
             "--mem-fraction-static",
@@ -113,8 +113,7 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
             cls.decode_load_balance_method,
             "--disaggregation-transfer-backend",
             "ascend",
-            "--disable-decode-cuda-graph",
-            "--disable-prefill-cuda-graph",
+            "--disable-cuda-graph",
             "--attention-backend",
             "ascend",
             "--mem-fraction-static",
@@ -155,19 +154,16 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
         )
 
     def test_server_info(self):
-        # sgl-router's /server_info answers with a single worker's body, so ask
-        # each worker directly.
-        prefill_info = requests.get(f"{self.prefill_url}/server_info")
-        decode_info = requests.get(f"{self.decode_url}/server_info")
-        self.assertEqual(prefill_info.status_code, 200)
-        self.assertEqual(decode_info.status_code, 200)
+        response = requests.get(f"{self.lb_url}/get_server_info")
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.text)
         self.assertEqual(
             (
                 "follow_bootstrap_room"
                 if self.prefill_load_balance_method == "auto"
                 else self.prefill_load_balance_method
             ),
-            prefill_info.json().get("load_balance_method"),
+            data.get("prefill")[0].get("load_balance_method"),
         )
         self.assertEqual(
             (
@@ -175,7 +171,7 @@ class BaseTestNPULoadBalanceMethodDPDisaggregation(TestDisaggregationBase):
                 if self.decode_load_balance_method == "auto"
                 else self.decode_load_balance_method
             ),
-            decode_info.json().get("load_balance_method"),
+            data.get("decode")[0].get("load_balance_method"),
         )
 
     @classmethod

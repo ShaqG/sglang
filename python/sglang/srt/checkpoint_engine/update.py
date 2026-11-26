@@ -27,8 +27,6 @@ import torch
 import torch.distributed as dist
 from safetensors import safe_open
 
-from sglang.srt.utils.auth import admin_auth_headers
-
 try:
     from checkpoint_engine.ps import ParameterServer
     from loguru import logger
@@ -116,7 +114,6 @@ def req_inference(
     timeout: float = 300.0,
     uds: str | None = None,
     weight_version: str | None = None,
-    admin_api_key: str | None = None,
 ) -> Callable[[list[tuple[str, str]]], None]:
     rank = int(os.getenv("RANK", 0))
     src = rank // inference_parallel_size * inference_parallel_size
@@ -134,7 +131,6 @@ def req_inference(
                         "weight_version": weight_version,
                     },
                     timeout=timeout,
-                    headers=admin_auth_headers(admin_api_key),
                 )
                 resp.raise_for_status()
 
@@ -263,12 +259,6 @@ def main():
     parser.add_argument("--update-method", type=str, default="broadcast")
     parser.add_argument("--uds", type=str, default=None)
     parser.add_argument("--weight-version", type=str, default=None)
-    parser.add_argument(
-        "--admin-api-key",
-        type=str,
-        default=None,
-        help="The server's --admin-api-key, which /update_weights_from_ipc requires (default: SGLANG_ADMIN_API_KEY).",
-    )
     args = parser.parse_args()
 
     # Get rank and world_size from environment (set by torchrun)
@@ -280,7 +270,6 @@ def main():
         args.inference_parallel_size,
         uds=args.uds,
         weight_version=args.weight_version,
-        admin_api_key=args.admin_api_key,
     )
 
     if ParameterServer is None:

@@ -29,11 +29,9 @@ import requests
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 from sglang.test.test_utils import (
-    ADMIN_LAUNCH_ARGS_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
-    admin_post,
     calculate_rouge_l,
     popen_launch_server,
 )
@@ -45,7 +43,7 @@ register_cuda_ci(
 )
 register_amd_ci(
     est_time=380,
-    suite="nightly-test-1-gpu-amd",
+    suite="nightly-amd-1-gpu",
     nightly=True,
 )
 
@@ -233,7 +231,6 @@ class LoRAUpdateServerTestSession:
             "--mem-fraction-static",
             str(MEM_FRACTION_STATIC),
             "--disable-radix-cache",
-            *ADMIN_LAUNCH_ARGS_FOR_TEST,
         ]
         if self.enable_lora:
             other_args.append("--enable-lora")
@@ -279,7 +276,7 @@ class LoRAUpdateServerTestSession:
     ):
         if lora_path is None:
             lora_path = lora_name
-        response = admin_post(
+        response = requests.post(
             DEFAULT_URL_FOR_TEST + "/load_lora_adapter",
             json={"lora_name": lora_name, "lora_path": lora_path, "pinned": pinned},
         )
@@ -293,7 +290,7 @@ class LoRAUpdateServerTestSession:
 
     def unload_lora_adapter(self, lora_name: str):
         del self.expected_adapters[lora_name]
-        response = admin_post(
+        response = requests.post(
             DEFAULT_URL_FOR_TEST + "/unload_lora_adapter",
             json={"lora_name": lora_name},
         )

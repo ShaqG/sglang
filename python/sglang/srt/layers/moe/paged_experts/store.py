@@ -4,7 +4,6 @@ fill it."""
 from __future__ import annotations
 
 import concurrent.futures
-import contextlib
 import ctypes
 import functools
 import logging
@@ -14,17 +13,7 @@ import os
 import sys
 import threading
 import weakref
-from typing import (
-    AbstractSet,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Sequence,
-    Set,
-    Tuple,
-)
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import torch
 
@@ -98,16 +87,6 @@ class HostExpertStore:
             return torch.empty(shape, dtype=dtype, device="cpu")
         return _pin_until_freed(shape, dtype)
 
-    @contextlib.contextmanager
-    def host_planned(self):
-        """Around the planning and the waves of a host-planned step."""
-        yield
-
-    def in_host_rows(self) -> AbstractSet[int]:
-        """The experts in host rows, for a store that reads the others from disk (inside
-        ``host_planned``); empty for a store that holds every expert."""
-        return frozenset()
-
     def page_in(self, layer, loads: Sequence[Tuple[int, int]]) -> None:
         """Copy each ``(expert, slot)`` pair's expert, of every paged tensor, into its slot."""
         for name, host in self.host.items():
@@ -142,28 +121,12 @@ class HostExpertStore:
             for v in (hosts, gpus, sizes)
         ]
 
-    def bind(self, layer, device_planned: bool) -> None:
-        """Prepare the transfers once the layer's tensors are final; with
-        ``device_planned``, steps are also decided on the GPU (``gather``)."""
-        if device_planned:
-            self.bind_device_gather(layer)
-
-    def gather(
-        self,
-        src: torch.Tensor,
-        dst: torch.Tensor,
-        count: torch.Tensor,
-        blocks: int = 256,
-    ) -> None:
+    def gather(self, src: torch.Tensor, dst: torch.Tensor, count: torch.Tensor) -> None:
         """Copy expert ``src[i]`` into GPU slot ``dst[i]`` for ``i < count[0]``, with every
-        index read on the GPU (a device-planned step): capturable in a CUDA graph. ``blocks``:
-        the copy's grid (narrow beside compute)."""
+        index read on the GPU (a device-planned step): capturable in a CUDA graph."""
         from sglang.kernels.ops.moe.paged_experts import paged_experts_gather
 
-        paged_experts_gather(*self._gather_args, src, dst, count, blocks=blocks)
-
-    def resolve_pending(self) -> None:
-        """Finish what the last ``gather`` left to the host."""
+        paged_experts_gather(*self._gather_args, src, dst, count)
 
 
 class ExpertLoads:

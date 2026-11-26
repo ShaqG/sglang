@@ -301,7 +301,6 @@ class PrefillInputBuffers(ForwardInputBuffers):
         pp_proxy_topk_size: Optional[int] = None,
         pp_proxy_residual_num_blocks: Optional[int] = None,
         pp_proxy_dspark_hidden_size: int = 0,
-        input_embeds_dtype: Optional[torch.dtype] = None,
     ) -> PrefillInputBuffers:
         with torch.device(device):
             input_ids = torch.zeros((max_num_tokens,), dtype=torch.int64)
@@ -326,9 +325,7 @@ class PrefillInputBuffers(ForwardInputBuffers):
                 enable_input_embeds = is_multimodal
 
             if enable_input_embeds:
-                input_embeds = torch.zeros(
-                    (max_num_tokens, hidden_size), dtype=input_embeds_dtype or dtype
-                )
+                input_embeds = torch.zeros((max_num_tokens, hidden_size), dtype=dtype)
             else:
                 input_embeds = None
 

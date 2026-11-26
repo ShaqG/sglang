@@ -17,8 +17,7 @@ class TestHealthCheck(CustomTestCase):
                 DEFAULT_URL_FOR_TEST,
                 timeout=60,
                 other_args=[
-                    "--disable-decode-cuda-graph",
-                    "--disable-prefill-cuda-graph",
+                    "--disable-cuda-graph",
                     "--json-model-override-args",
                     '{"architectures": ["LlamaForCausalLMForHealthTest"]}',
                 ],

@@ -54,10 +54,12 @@ def resolve_target_hw(
     spec: str | None,
     sr_hw: tuple[int, int],
     mode: TargetResizeMode = "fit",
+    validate_only: bool = False,
 ) -> tuple[int, int] | None:
     """Resolve a tier or WxH bucket to (H, W), or None for no resize.
 
-    fit preserves aspect; exact returns the bucket dimensions."""
+    fit preserves aspect; exact returns the bucket dimensions. validate_only
+    checks syntax without needing an actual SR result."""
     if mode not in ("fit", "exact"):
         raise ValueError(
             f"sr_target_resize_mode must be 'fit' or 'exact', got {mode!r}"
@@ -79,7 +81,7 @@ def resolve_target_hw(
             )
         width, height = (int(part) for part in parts)
         bucket = (height, width)
-    if mode == "exact":
+    if mode == "exact" or validate_only:
         return bucket
     return fit_within(sr_hw, bucket)
 

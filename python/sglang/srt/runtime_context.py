@@ -520,6 +520,17 @@ def is_scheduler_io_rank() -> bool:
     )
 
 
+def is_control_broadcast_local() -> bool:
+    """Whether each attention-DP group leader receives control requests from
+    the DP controller and broadcasts them within its group, instead of the
+    first leader broadcasting them over the whole TP group."""
+    parallel = get_parallel()
+    return parallel.attn_dp_enabled and (
+        parallel.enable_dp_attention_local_control_broadcast
+        or get_exec().moe.is_ep_scale_joiner
+    )
+
+
 class _FlagGroupBase(msgspec.Struct):
     """Shared flag-group behavior: typo-safe writes + transactional ``override()``.
 
@@ -722,6 +733,17 @@ class ForwardFlags:
         # ForwardBatch.attn_tp_sequence_sharded decision, stamped by the model
         # that slices); read by the benchmark routing override.
         "attn_tp_sequence_sharded": False,
+        # Number of attention-TP slices per DP shard at the MoE input.
+        "moe_attn_tp_row_splits": 1,
+        # Physical token rows in TP rank order for the current Ascend MoE call.
+        "ascend_allgather_row_sizes": None,
+        # The batch of the current model forward, published by ModelRunner so
+        # the EP dispatcher can derive an Ascend allgather row layout lazily.
+        "forward_batch": None,
+        # Whether the FFN stage's MoE input is a contiguous attention-TP slice
+        # of the DP shard (True) or the gathered full shard on every rank
+        # (False). None means the stage did not declare it.
+        "moe_input_attn_tp_sliced": None,
     }
 
     # Read/written inside compiled graphs (vocab embedding, layer boundaries,
@@ -739,6 +761,7 @@ class ForwardFlags:
             "lora_batch_layout",
             "sp_active",
             "attn_tp_sequence_sharded",
+            "moe_attn_tp_row_splits",
         }
     )
 
@@ -1241,9 +1264,7 @@ class _ServerArgsOverride:
         self._prev_publish_role = ctx._publish_role
         self._prev_parallel_config = ctx.parallel._config
         self._prev_capture = ctx.flags.capture.enable_torch_compile
-        from sglang.srt.arg_groups.overrides import (
-            declare_resolution,
-        )
+        from sglang.srt.arg_groups.overrides import declare_resolution
 
         server_args = ServerArgs(model_path="dummy")
         server_args.resolve_once()
@@ -1854,6 +1875,7 @@ _PLATFORM_PROBES: Dict[str, str] = {
     "is_sm110": "is_sm110_supported",
     "is_sm120": "is_sm120_supported",
     "is_blackwell": "is_blackwell_supported",
+    "is_gfx95": "is_gfx95_supported",
     "is_hopper_with_cuda_12_3": "is_hopper_with_cuda_12_3",
     "has_amx": "cpu_has_amx_support",
     "has_flashinfer": "is_flashinfer_available",
@@ -1886,7 +1908,7 @@ class PlatformContext:
             raise AttributeError(
                 f"unknown platform fact {name!r}; known: {', '.join(known)}"
             )
-        overrides = object.__getattribute__(self, "_overrides")
+        overrides = self._overrides
         if name in overrides:
             return overrides[name]
         from sglang.srt.utils import device as _device
@@ -2094,8 +2116,8 @@ def describe_kv_events_publisher(server_args: Any) -> Optional[dict]:
     publisher, or `None` if publishing is disabled / misconfigured.
 
     This is the wire contract surfaced under the `kv_events` key on
-    `/server_info` so KV-aware routers (e.g. the SGLang model
-    gateway) can subscribe per-worker without operator-supplied port
+    `/server_info` so KV-aware routers (e.g. sgl-router) can
+    subscribe per-worker without operator-supplied port
     coordination. The router constructs the per-DP-rank SUB endpoint
     as tcp://<worker_host>:<endpoint_port_base + dp_rank> for
     every rank reported in dp_size.

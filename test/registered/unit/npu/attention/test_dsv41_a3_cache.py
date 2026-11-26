@@ -25,7 +25,7 @@ register_cpu_ci(est_time=8, stage="base-a", runner_config="cpu")
 ROOT = Path(__file__).resolve().parents[5]
 POOL_FILE = ROOT / "python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py"
 BUDGET_FILE = ROOT / "python/sglang/srt/model_executor/pool_configurator.py"
-LAYOUT_FILE = ROOT / "python/sglang/srt/hardware_backend/npu/dsv4/npu_kv_layout.py"
+LAYOUT_FILE = ROOT / "python/sglang/srt/hardware_backend/npu/dsv4/dsv4_kv_layout.py"
 NPUDSV4KVLayout = runpy.run_path(str(LAYOUT_FILE))["NPUDSV4KVLayout"]
 STATE_FILE = ROOT / "python/sglang/srt/mem_cache/deepseek_v4_compress_state.py"
 
